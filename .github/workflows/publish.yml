@@ -94,8 +94,8 @@ jobs:
             echo ""
             echo "| field | value |"
             echo "|---|---|"
-            echo "| owner | \`$owner\` |"
-            echo "| push | \`$push\` |"
+            echo "| owner | $owner |"
+            echo "| push | $push |"
             echo "| reason | $reason |"
           } >> "$GITHUB_STEP_SUMMARY"
 
@@ -179,20 +179,26 @@ jobs:
           IMAGE: ${{ matrix.image.name }}
           OWNER: ${{ needs.prep.outputs.owner }}
         run: |
+          # Assigned with single quotes and expanded via "$FENCE", so the
+          # backticks never pass through a quoted string literal. Writing
+          # echo "```" makes bash start a command substitution that never
+          # ends: "unexpected EOF while looking for matching `'".
+          FENCE='```'
+
           {
-            echo "### \`$IMAGE\`"
+            echo "### $IMAGE"
             echo ""
-            echo "push: \`$PUSHED\` — $REASON"
+            echo "push: $PUSHED — $REASON"
             echo ""
-            echo '```'
+            echo "$FENCE"
             echo "$TAGS"
-            echo '```'
+            echo "$FENCE"
             if [ "$PUSHED" = "true" ] && [ '${{ github.event_name }}' = "pull_request" ]; then
               echo ""
               echo "Test before merging:"
               echo ""
-              echo '```bash'
+              echo "${FENCE}bash"
               echo "kubectl set image deployment/desktop-web web=ghcr.io/$OWNER/$IMAGE:pr-${{ github.event.pull_request.number }} -n <namespace>"
-              echo "```"
+              echo "$FENCE"
             fi
           } >> "$GITHUB_STEP_SUMMARY"
