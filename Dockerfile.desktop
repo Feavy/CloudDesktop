@@ -1,8 +1,11 @@
-# Full desktop pod: XFCE + TigerVNC + websockify + this web client, all in
-# one image. Use this when you do not already have a desktop pod.
+# Desktop only: XFCE + TigerVNC + websockify, and nothing else.
 #
-# The lighter ./Dockerfile builds only the web client, for when XFCE/TigerVNC
-# already run elsewhere.
+# Use this when the web client runs as its own deployment or container
+# (Dockerfile.client), pointed at the websockify port exposed here. It installs
+# no Node.js, so the image stays considerably smaller than Dockerfile.full.
+#
+#   kubectl run ... ghcr.io/feavy/clouddesktop-desktop
+#   the web client then sets WS_URL=wss://<this-host>/websockify
 FROM ubuntu:24.04
 
 ENV DEBIAN_FRONTEND=noninteractive \
@@ -12,31 +15,21 @@ ENV DEBIAN_FRONTEND=noninteractive \
     VNC_WS_PORT=6900 \
     DISPLAY_GEOMETRY=1920x1080
 
-# Every prerequisite the web client and the desktop need
+# INSTALL_NODE=0 because the desktop does not need a JS runtime. Everything
+# else -- including the xclip/wmctrl/xrandr/cvt tooling the web client shells
+# out to -- is installed, so this image works unchanged if you later decide to
+# run the client inside it.
 COPY install.sh /tmp/install.sh
-RUN bash /tmp/install.sh && rm -f /tmp/install.sh
+RUN INSTALL_NODE=0 bash /tmp/install.sh && rm -f /tmp/install.sh
 
-# The web client itself
-WORKDIR /app
-COPY server/package.json server/package-lock.json ./server/
-RUN cd server && npm ci --omit=dev && npm cache clean --force
-COPY server ./server
-COPY client ./client
-COPY deploy/entrypoint.sh /usr/local/bin/entrypoint
-RUN chmod +x /usr/local/bin/entrypoint
+# 6900 = websockify (the browser-facing port)
+EXPOSE 6900
 
-ENV NODE_ENV=production \
-    HOST=0.0.0.0 \
-    PORT=3000 \
-    DISPLAY=:1 \
-    VNC_HOST=127.0.0.1 \
-    VNC_PORT=5900
-
-# 3000 = web client, 6900 = websockify
-EXPOSE 3000 6900
-
+# Probes the websockify port rather than just the binary's existence, so a
+# container that has crashed X but is still running reports unhealthy.
 HEALTHCHECK --interval=30s --timeout=3s --start-period=20s --retries=3 \
-  CMD node -e "fetch('http://127.0.0.1:3000/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"
+  CMD bash -c 'exec 3<>/dev/tcp/127.0.0.1/${VNC_WS_PORT:-6900}' || exit 1
 
-# tini reaps the X, dbus and websockify children that the launcher forks
-ENTRYPOINT ["/usr/bin/tini", "--", "/usr/local/bin/entrypoint"]
+# tini reaps the X, dbus and websockify children that start-desktop forks
+ENTRYPOINT ["/usr/bin/tini", "--"]
+CMD ["/usr/local/bin/start-desktop"]

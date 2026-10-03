@@ -65,21 +65,25 @@ port. If you already run websocketify, set `WS_URL` and that bridge is bypassed.
 
 ## Building
 
-Two images, depending on what you already have.
+Three images, so you can take only what you need.
 
-**Web client only** — when XFCE/TigerVNC already run in a pod:
-
-```bash
-docker build -t clouddesktop-web:latest .
-```
-
-**All-in-one desktop** — when starting from a bare `ubuntu:24.04`:
+| Dockerfile | Image | Contents | Size |
+|---|---|---|---|
+| `Dockerfile.client` | `clouddesktop-client` | The web client only, on `node:22-alpine` | ~150 MB |
+| `Dockerfile.desktop` | `clouddesktop-desktop` | XFCE + TigerVNC + websockify, no Node.js | ~1.5 GB |
+| `Dockerfile.full` | `clouddesktop-full` | All three in one image | ~2.5 GB |
 
 ```bash
+docker build -f Dockerfile.client  -t clouddesktop-client:latest .
 docker build -f Dockerfile.desktop -t clouddesktop-desktop:latest .
+docker build -f Dockerfile.full    -t clouddesktop-full:latest .
 ```
 
-`install.sh` installs every prerequisite into a bare Ubuntu image: TigerVNC,
+Use `clouddesktop-full` if you want one container and don't care about size. Use
+the split `clouddesktop-desktop` + `clouddesktop-client` pair if you already run
+the desktop yourself, or want the web client on a smaller base.
+
+Both Ubuntu-based images are built by `install.sh`, which installs TigerVNC,
 websockify, XFCE, and — importantly — the X tooling (`xclip`, `wmctrl`, `xrandr`,
 `cvt`) that the web client shells out to. Without those the desktop renders fine
 but silently loses clipboard sync, the window switcher and resolution switching.
@@ -92,13 +96,15 @@ CMD ["start-desktop"]
 ```
 
 It writes two scripts into the image: `/usr/local/bin/start-vnc` (Xtigervnc + XFCE +
-websockify) and `/usr/local/bin/xfce-vnc-session` (the session inside X).
+websockify) and `/usr/local/bin/xfce-vnc-session` (the session inside X). After
+installing, it asserts that all 17 binaries the app invokes are actually present
+and fails the build naming the providing package if one is missing.
 
 Opt-in extras:
 
 | Variable | Default | Effect |
 |---|---|---|
-| `INSTALL_NODE` | `1` | Install Node.js from NodeSource (Ubuntu's own is 18, EOL) |
+| `INSTALL_NODE` | `1` | Install Node.js from NodeSource (Ubuntu's own is 18, EOL). `Dockerfile.desktop` sets this to `0` |
 | `NODE_MAJOR` | `22` | NodeSource major version |
 | `INSTALL_BROWSERS` | `0` | Google Chrome (the dock's Chrome icon) |
 | `INSTALL_FIREFOX` | `0` | Firefox from Mozilla's APT repo, not Ubuntu's snap wrapper |
@@ -113,35 +119,64 @@ simply shows a smaller dock.
 
 ### Deployment shapes
 
-**Sidecar in the VNC pod** — add the container to the existing pod spec. Then
-`VNC_HOST=127.0.0.1` works as-is:
+**One container** — `clouddesktop-full`. Nothing to wire up:
+
+```yaml
+containers:
+  - name: desktop
+    image: ghcr.io/feavy/clouddesktop-full:latest
+```
+
+**Split into two Deployments** — `clouddesktop-desktop` for the desktop,
+`clouddesktop-client` for the web client. Expose the desktop's websockify port
+through Traefik and point the client at it:
+
+```yaml
+# desktop: no Service needed if websockify is reached over the IngressRoute
+containers:
+  - name: desktop
+    image: ghcr.io/feavy/clouddesktop-desktop:latest
+    ports: [{ containerPort: 6900 }]
+
+# client
+containers:
+  - name: web
+    image: ghcr.io/feavy/clouddesktop-client:latest
+    env:
+      - name: WS_URL
+        value: "wss://desktop.example.com/websockify"
+```
+
+With `WS_URL` set, the browser talks to websockify directly and the client's own
+WebSocket-to-TCP bridge is bypassed entirely.
+
+**Sidecar in the same pod as your existing desktop** — for the clipboard,
+resolution and window features to work, the client must reach the same X display
+as the VNC server. Put it in the same container, or share the IPC namespace and
+X socket:
 
 ```yaml
 containers:
   - name: desktop
     # ... your XFCE + TigerVNC + websockify setup
   - name: web
-    image: your-registry/desktop-web:latest
+    image: ghcr.io/feavy/clouddesktop-client:latest
     env:
       - name: VNC_HOST
         value: "127.0.0.1"
       - name: VNC_PORT
-        value: "5901"
+        value: "5900"
       - name: DISPLAY
         value: ":1"
     ports:
       - containerPort: 3000
 ```
 
-Note that the app, `xclip`, `wmctrl` and `xrandr` all talk to the same X display, so in
-this shape they must run in the same container as the VNC server (or share its IPC
-namespace and X socket). Otherwise the clipboard, resolution and window features will
-fail while the picture itself keeps working.
-
-**Separate deployment** — run this as its own Deployment and point `VNC_HOST` at the
-VNC pod's IP or Service name. The dock features then shell out in *this* container and
-will not reach the remote X server, so they are best disabled by removing the relevant
-binaries; the picture, dock and touch controls still work.
+The app, `xclip`, `wmctrl` and `xrandr` all talk to that X display. In the
+split-two-Deployments shape above they run in a container that has no X server, so
+those three features fail while the picture, dock and touch controls keep
+working — which is the main reason to prefer the single `clouddesktop-full` image
+if you rely on them.
 
 ---
 
@@ -175,8 +210,9 @@ the workflow's own `GITHUB_TOKEN`:
 
 | Image | Contents |
 |---|---|
-| `ghcr.io/feavy/clouddesktop-web` | Web client only (for an existing XFCE/TigerVNC pod) |
-| `ghcr.io/feavy/clouddesktop-desktop` | All-in-one: XFCE + TigerVNC + websockify + web client |
+| `ghcr.io/feavy/clouddesktop-client` | Web client only |
+| `ghcr.io/feavy/clouddesktop-desktop` | XFCE + TigerVNC + websockify |
+| `ghcr.io/feavy/clouddesktop-full` | All-in-one |
 
 | Event | Tags produced |
 |---|---|
@@ -189,7 +225,7 @@ the workflow's own `GITHUB_TOKEN`:
 workflow publishes a snapshot under a `pr-<number>` tag. Point a deployment at it:
 
 ```bash
-kubectl set image deployment/desktop-web web=ghcr.io/feavy/clouddesktop-web:pr-42 -n <namespace>
+kubectl set image deployment/desktop-web web=ghcr.io/feavy/clouddesktop-client:pr-42 -n <namespace>
 ```
 
 `pr-<number>` is overwritten by each new commit on that PR, so `kubectl rollout

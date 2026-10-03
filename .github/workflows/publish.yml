@@ -4,10 +4,11 @@ name: Publish images
 # Container Registry (ghcr.io). No registry credentials are needed: the
 # workflow uses the automatically-issued GITHUB_TOKEN.
 #
-#   ghcr.io/<owner>/clouddesktop-web      web client only (needs an existing
-#                                         XFCE/TigerVNC pod)
-#   ghcr.io/<owner>/clouddesktop-desktop  all-in-one (XFCE + TigerVNC +
-#                                         websockify + web client)
+#   ghcr.io/<owner>/clouddesktop-client   web client only, ~150 MB. For when
+#                                         the desktop already runs elsewhere.
+#   ghcr.io/<owner>/clouddesktop-desktop  XFCE + TigerVNC + websockify, no
+#                                         Node.js. Pair with the client.
+#   ghcr.io/<owner>/clouddesktop-full     all three in one image, ~2.5 GB.
 #
 # Tags produced:
 #   main / v* push : <branch>, latest (on main), and semver tags
@@ -110,11 +111,14 @@ jobs:
       fail-fast: false
       matrix:
         image:
-          - name: clouddesktop-web
-            dockerfile: Dockerfile
+          - name: clouddesktop-client
+            dockerfile: Dockerfile.client
             context: .
           - name: clouddesktop-desktop
             dockerfile: Dockerfile.desktop
+            context: .
+          - name: clouddesktop-full
+            dockerfile: Dockerfile.full
             context: .
     steps:
       - uses: actions/checkout@v4

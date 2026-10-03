@@ -46,7 +46,7 @@ spec:
         - name: web
           # Published to GHCR by .github/workflows/publish.yml on every push
           # to main. Swap the owner if you fork this again.
-          image: ghcr.io/feavy/clouddesktop-web:latest
+          image: ghcr.io/feavy/clouddesktop-client:latest
           imagePullPolicy: Always
           ports:
             - name: http
