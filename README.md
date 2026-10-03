@@ -161,8 +161,9 @@ In the full image the web client deliberately runs as that same user, because it
 shells out to `xclip`/`wmctrl`/`xrandr` against the same X display and reads the
 `.Xauthority` that `Xtigervnc` wrote.
 
-`start-vnc` refuses to run as root, and fails early with a clear message if
-`HOME` is unset or unwritable rather than starting into a black screen.
+`start-vnc` fails early with a clear message if `HOME` is unset or unwritable
+rather than starting into a black screen. It does not refuse to run as root, so
+overriding `USER` in a Deployment works if you need to.
 
 #### Passwordless sudo
 

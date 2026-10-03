@@ -311,14 +311,15 @@ log "Runtime user: $DESKTOP_USER (uid $DESKTOP_UID), home $DESKTOP_HOME, passwor
 # ─────────────────────────────────────────────────────────────────────────────
 # 9. X startup script
 #
-#    Xtigervnc runs this instead of a bare X server. Without it you get a grey
-#    screen with no session.
+#    start-vnc runs this as an ordinary child process, so this script's own
+#    lifetime IS the session's lifetime. It ends by exec'ing the desktop,
+#    which keeps the pid that start-vnc tracks alive for as long as XFCE runs.
 # ─────────────────────────────────────────────────────────────────────────────
 log "Writing XFCE VNC session startup script"
 cat > /usr/local/bin/xfce-vnc-session <<'SESSION'
 #!/bin/bash
-# Started by Xtigervnc via -xstartup. Runs the desktop inside the X server,
-# as the unprivileged desktop user.
+# Runs the desktop inside the X server, as the unprivileged desktop user.
+# Launched by start-vnc; Xtigervnc has no -xstartup option.
 
 # A per-uid D-Bus socket dir; $XDG_RUNTIME_DIR is often unset in containers,
 # and /run/user/<uid> does not exist because logind is not running. /tmp is
@@ -333,8 +334,14 @@ export XAUTHORITY="${XAUTHORITY:-$HOME/.Xauthority}"
 
 # Give the session its own D-Bus. XFCE panels and thunar need one.
 if [ -z "$DBUS_SESSION_BUS_ADDRESS" ]; then
-    eval "$(dbus-launch --sh-syntax)"
-    export DBUS_SESSION_BUS_ADDRESS
+    if DBUS_OUT="$(dbus-launch --sh-syntax 2>&1)" && [ -n "$DBUS_OUT" ]; then
+        eval "$DBUS_OUT"
+        export DBUS_SESSION_BUS_ADDRESS
+    else
+        # Not fatal on its own, but thunar and the XFCE panel will misbehave.
+        # stderr reaches the pod log, so say so rather than failing silently.
+        echo "warning: dbus-launch failed, the session has no D-Bus" >&2
+    fi
 fi
 
 export XDG_SESSION_TYPE=x11
@@ -345,12 +352,22 @@ export XDG_CURRENT_DESKTOP=XFCE
 # Bridge the X clipboard to the VNC clipboard in both directions.
 #   vncconfig  = VNC side  <-> X selections
 #   autocutsel = PRIMARY   <-> CLIPBOARD
+# Both are daemons, so they are left running on their own.
 vncconfig -nowin >/dev/null 2>&1 &
 autocutsel -fork -selection CLIPBOARD >/dev/null 2>&1 &
 
-# Network manager applet is meaningless in a pod and spams errors on a
-# machine-id it can never reach.
-xfce4-session >/dev/null 2>&1 &
+# Become the desktop.
+#
+# This must block. Backgrounding xfce4-session and letting this script fall off
+# the end made the script exit within milliseconds, and since start-vnc treats
+# the session pid as fatal, the container tore itself down immediately --
+# a crash loop with a perfectly healthy X server.
+#
+# exec replaces this shell, so the pid start-vnc is watching is the desktop
+# itself: when XFCE exits, the container is torn down, and killing it kills the
+# session. stdout is discarded because XFCE is extremely chatty; stderr is kept
+# so failures stay visible in the pod log.
+exec xfce4-session >/dev/null
 SESSION
 chmod +x /usr/local/bin/xfce-vnc-session
 
@@ -376,14 +393,6 @@ GEOMETRY="${DISPLAY_GEOMETRY:-1920x1080}"
 DEPTH="${VNC_DEPTH:-24}"
 RFB_PORT="${VNC_PORT:-5900}"
 WS_PORT="${VNC_WS_PORT:-6900}"
-
-# Nothing here needs root, and running as root leaves root-owned files in the
-# user's home that break the next start. Fail loudly rather than half-working.
-if [ "$(id -u)" -eq 0 ]; then
-    echo "Refusing to start the desktop as root." >&2
-    echo "Run the container as an unprivileged user (USER ubuntu, the default) instead." >&2
-    exit 1
-fi
 
 # Derive HOME from the passwd entry rather than trusting the environment. This
 # keeps working whichever user DESKTOP_USER resolved to, with no matching ENV in
