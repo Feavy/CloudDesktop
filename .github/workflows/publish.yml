@@ -57,6 +57,7 @@ jobs:
       owner: ${{ steps.vars.outputs.owner }}
       push: ${{ steps.vars.outputs.push }}
       reason: ${{ steps.vars.outputs.reason }}
+      base_tag: ${{ steps.vars.outputs.base_tag }}
     steps:
       - id: vars
         env:
@@ -90,6 +91,13 @@ jobs:
 
           echo "push=$push"     >> "$GITHUB_OUTPUT"
           echo "reason=$reason" >> "$GITHUB_OUTPUT"
+
+          # clouddesktop-full is built FROM clouddesktop-desktop so it does not
+          # re-install XFCE. It must use the desktop image this run produced,
+          # not a previously published tag, otherwise a PR that edits
+          # install.sh would silently get main's desktop layer as its base.
+          # The sha tag is immutable, so it can never go stale mid-run.
+          echo "base_tag=sha-${GITHUB_SHA:0:7}" >> "$GITHUB_OUTPUT"
           {
             echo "### Registry resolution"
             echo ""
@@ -104,6 +112,9 @@ jobs:
     name: Build ${{ matrix.image.name }}
     # Runs on pull requests too, to catch a broken build before merge. The
     # push step below is what honours needs.prep.outputs.push.
+    #
+    # clouddesktop-full is NOT in this matrix: it is built FROM the desktop
+    # image, so it needs this job to have finished and pushed. See build-full.
     needs: prep
     runs-on: ubuntu-latest
     timeout-minutes: 90
@@ -116,9 +127,6 @@ jobs:
             context: .
           - name: clouddesktop-desktop
             dockerfile: Dockerfile.desktop
-            context: .
-          - name: clouddesktop-full
-            dockerfile: Dockerfile.full
             context: .
     steps:
       - uses: actions/checkout@v4
@@ -203,6 +211,95 @@ jobs:
               echo ""
               echo "${FENCE}bash"
               echo "kubectl set image deployment/desktop-web web=ghcr.io/$OWNER/$IMAGE:pr-${{ github.event.pull_request.number }} -n <namespace>"
+              echo "$FENCE"
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
+  build-full:
+    name: Build clouddesktop-full
+    # Built on top of the desktop image this same run produced, rather than
+    # re-installing XFCE from scratch. Waiting on `build` guarantees the base
+    # exists and matches the current commit.
+    #
+    # Skipped when nothing is pushed (a fork pull request), because then there
+    # is no freshly-built base tag in the registry to pull. Those runs still
+    # produce client and desktop, neither of which has a base dependency.
+    needs: [prep, build]
+    if: needs.prep.outputs.push == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up QEMU
+        if: contains(inputs.platforms || 'linux/amd64', 'arm64')
+        uses: docker/setup-qemu-action@v3
+
+      - name: Set up Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to ${{ env.REGISTRY }}
+        if: needs.prep.outputs.push == 'true'
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Compute image tags
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.REGISTRY }}/${{ needs.prep.outputs.owner }}/clouddesktop-full
+          tags: |
+            type=ref,event=branch
+            type=ref,event=pr
+            type=sha,format=short
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
+            type=raw,value=latest,enable={{is_default_branch}}
+
+      - name: Build and push
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: Dockerfile.full
+          platforms: ${{ inputs.platforms || 'linux/amd64' }}
+          push: ${{ needs.prep.outputs.push == 'true' }}
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          build-args: |
+            BASE_IMAGE=${{ env.REGISTRY }}/${{ needs.prep.outputs.owner }}/clouddesktop-desktop:${{ needs.prep.outputs.base_tag }}
+          cache-from: type=gha,scope=clouddesktop-full
+          cache-to: type=gha,mode=max,scope=clouddesktop-full
+          provenance: false
+          sbom: false
+
+      - name: Summarise
+        if: always()
+        env:
+          PUSHED: ${{ needs.prep.outputs.push }}
+          REASON: ${{ needs.prep.outputs.reason }}
+          TAGS: ${{ steps.meta.outputs.tags }}
+          OWNER: ${{ needs.prep.outputs.owner }}
+          BASE: ${{ env.REGISTRY }}/${{ needs.prep.outputs.owner }}/clouddesktop-desktop:${{ needs.prep.outputs.base_tag }}
+        run: |
+          FENCE='```'
+          {
+            echo "### clouddesktop-full"
+            echo ""
+            echo "push: $PUSHED — $REASON"
+            echo ""
+            echo "base image: $BASE"
+            echo ""
+            echo "$FENCE"
+            echo "$TAGS"
+            echo "$FENCE"
+            if [ "$PUSHED" = "true" ] && [ '${{ github.event_name }}' = "pull_request" ]; then
+              echo ""
+              echo "Test before merging:"
+              echo ""
+              echo "${FENCE}bash"
+              echo "kubectl set image deployment/desktop-web web=ghcr.io/$OWNER/clouddesktop-full:pr-${{ github.event.pull_request.number }} -n <namespace>"
               echo "$FENCE"
             fi
           } >> "$GITHUB_STEP_SUMMARY"

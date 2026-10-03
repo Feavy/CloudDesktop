@@ -1,19 +1,30 @@
 # Everything in one image: XFCE + TigerVNC + websockify + this web client.
-# The simplest option, and by far the largest — roughly 2.5 GB.
 #
-# For a smaller footprint, split it in two:
-#   ./Dockerfile.desktop   XFCE + TigerVNC + websockify   (no Node.js)
-#   ./Dockerfile.client    the web client only
-FROM ubuntu:24.04
+# Built on top of clouddesktop-desktop rather than from ubuntu:24.04, so the
+# ~1.5 GB desktop layer is reused instead of re-downloaded and re-installed on
+# every build. Only Node.js and the application code are added here.
+#
+# The base is pinned per run by BASE_IMAGE. The workflow passes the
+# clouddesktop-desktop tag this same commit produced, never a moving tag like
+# `latest`, so a build can never pick up a base from a different commit.
+#
+# Local builds need the base present first:
+#   docker pull ghcr.io/feavy/clouddesktop-desktop:latest
+#   docker build -f Dockerfile.full \
+#     --build-arg BASE_IMAGE=ghcr.io/feavy/clouddesktop-desktop:latest .
+ARG BASE_IMAGE=ghcr.io/feavy/clouddesktop-desktop:latest
+FROM ${BASE_IMAGE}
 
-ENV DEBIAN_FRONTEND=noninteractive \
-    LANG=en_US.UTF-8 \
-    VNC_DISPLAY=:1 \
-    VNC_PORT=5900 \
-    VNC_WS_PORT=6900 \
-    DISPLAY_GEOMETRY=1920x1080
+# The desktop image ends as USER ubuntu; package installs need root.
+USER root
 
-# Every prerequisite the web client and the desktop need
+ENV DEBIAN_FRONTEND=noninteractive
+
+# install.sh is re-run here only to add Node.js. Every XFCE, TigerVNC and X
+# tool package is already present in the base, so apt has nothing to download
+# and this costs seconds rather than the several minutes a from-scratch build
+# spends on the desktop. Keeping the call means install.sh stays the single
+# source of truth for the package set.
 COPY install.sh /tmp/install.sh
 RUN bash /tmp/install.sh && rm -f /tmp/install.sh
 

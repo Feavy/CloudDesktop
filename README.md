@@ -76,8 +76,22 @@ Three images, so you can take only what you need.
 ```bash
 docker build -f Dockerfile.client  -t clouddesktop-client:latest .
 docker build -f Dockerfile.desktop -t clouddesktop-desktop:latest .
-docker build -f Dockerfile.full    -t clouddesktop-full:latest .
 ```
+
+`clouddesktop-full` is built **on top of** `clouddesktop-desktop` so the ~1.5 GB
+desktop layer is reused rather than re-installed on every build. It only adds
+Node.js and the application code:
+
+```bash
+docker pull ghcr.io/feavy/clouddesktop-desktop:latest
+docker build -f Dockerfile.full \
+  --build-arg BASE_IMAGE=ghcr.io/feavy/clouddesktop-desktop:latest \
+  -t clouddesktop-full:latest .
+```
+
+`BASE_IMAGE` defaults to the published `clouddesktop-desktop:latest`, but a CI
+build passes an immutable per-commit tag instead so the base can never come from
+a different commit than the code on top of it.
 
 Use `clouddesktop-full` if you want one container and don't care about size. Use
 the split `clouddesktop-desktop` + `clouddesktop-client` pair if you already run
@@ -87,6 +101,8 @@ Both Ubuntu-based images are built by `install.sh`, which installs TigerVNC,
 websockify, XFCE, and — importantly — the X tooling (`xclip`, `wmctrl`, `xrandr`,
 `cvt`) that the web client shells out to. Without those the desktop renders fine
 but silently loses clipboard sync, the window switcher and resolution switching.
+`Dockerfile.full` re-runs it over the base purely to add Node.js; every desktop
+package is already present, so apt has nothing to download.
 
 ```dockerfile
 FROM ubuntu:24.04
@@ -291,6 +307,13 @@ when it pushed one.
 A PR opened from a **fork** is built but not pushed: GitHub issues those runs a
 read-only `GITHUB_TOKEN`, so there is nothing to authenticate the push with. Open
 the PR against this repository instead if you need a snapshot.
+
+`clouddesktop-full` builds in a second job that waits for `clouddesktop-desktop`,
+since it uses that image as its base. A fork PR therefore also skips `full`,
+because there is no freshly-built base tag to pull — `client` and `desktop` still
+build. Note that GHCR packages are private by default, so the CI base pull needs
+your `clouddesktop-desktop` package to be public (or the workflow's login to
+cover it, which it does on same-repo runs).
 
 To publish by hand: **Actions → Publish images → Run workflow**.
 
