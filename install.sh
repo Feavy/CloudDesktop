@@ -360,6 +360,10 @@ chmod +x /usr/local/bin/xfce-vnc-session
 #    -SecurityTypes None is deliberate: the browser client has no VNC password
 #    field and sends an empty credential. If you enable VNC auth you must also
 #    change client/js/desktop.js to prompt for one.
+#
+#    Only options Xtigervnc actually accepts are passed. It has no -xstartup
+#    and no -NeverStartErrorDialog; Ubuntu 24.04 does not ship Xvnc either, so
+#    the XFCE session is started by this script rather than by the X server.
 # ─────────────────────────────────────────────────────────────────────────────
 log "Writing Xtigervnc launcher"
 cat > /usr/local/bin/start-vnc <<'STARTVNC'
@@ -434,16 +438,15 @@ Xtigervnc "$DISPLAY_NUM" \
     -AcceptKeyEvents \
     -AcceptPointerEvents \
     -SendCutText \
-    -AcceptCutText \
-    -xstartup /usr/local/bin/xfce-vnc-session \
-    -NeverStartErrorDialog &
+    -AcceptCutText &
 
 VNC_PID=$!
 
 # Wait for the X server to accept connections before declaring success
+READY=false
 for _ in $(seq 1 30); do
     if xdpyinfo -display "$DISPLAY_NUM" >/dev/null 2>&1; then
-        echo "X server ready on $DISPLAY_NUM (${GEOMETRY}, RFB :${RFB_PORT})"
+        READY=true
         break
     fi
     if ! kill -0 "$VNC_PID" 2>/dev/null; then
@@ -452,6 +455,19 @@ for _ in $(seq 1 30); do
     fi
     sleep 0.5
 done
+if [ "$READY" != true ]; then
+    echo "X server did not become ready on $DISPLAY_NUM in time" >&2
+    exit 1
+fi
+echo "X server ready on $DISPLAY_NUM (${GEOMETRY}, RFB :${RFB_PORT})"
+
+# Xtigervnc has no -xstartup option -- passing it fails with "Unrecognized
+# option" and the server never starts. Ubuntu 24.04 ships no Xvnc either, only
+# Xtigervnc, so the session is started here as an ordinary child process.
+# It is included in the wait below, so a crashed desktop restarts the pod
+# instead of leaving a black screen served over WebSocket.
+/usr/local/bin/xfce-vnc-session &
+SESSION_PID=$!
 
 # websockify exposes the same RFB stream over WebSocket.
 #
@@ -468,10 +484,12 @@ echo "websockify :${WS_PORT} -> 127.0.0.1:${RFB_PORT}"
 websockify ${NOVNC_WEB_ARGS[@]+"${NOVNC_WEB_ARGS[@]}"} "0.0.0.0:${WS_PORT}" "127.0.0.1:${RFB_PORT}" &
 WS_PID=$!
 
-# Exit if either dies so the container restarts rather than serving nothing
-wait -n "$VNC_PID" "$WS_PID"
-echo "A VNC process exited; shutting down."
-kill "$VNC_PID" "$WS_PID" 2>/dev/null || true
+# Exit if any of the three dies so the container restarts rather than serving
+# nothing. A dead desktop session is included deliberately: websockify would
+# still answer, so the container would look healthy while showing a grey screen.
+wait -n "$VNC_PID" "$WS_PID" "$SESSION_PID"
+echo "A desktop component exited; shutting down."
+kill "$VNC_PID" "$WS_PID" "$SESSION_PID" 2>/dev/null || true
 STARTVNC
 chmod +x /usr/local/bin/start-vnc
 

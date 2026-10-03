@@ -116,6 +116,13 @@ websockify) and `/usr/local/bin/xfce-vnc-session` (the session inside X). After
 installing, it asserts that all 17 binaries the app invokes are actually present
 and fails the build naming the providing package if one is missing.
 
+`start-vnc` launches XFCE itself rather than delegating to the X server, because
+`Xtigervnc` has no `-xstartup` option — passing it fails with
+`Unrecognized option: -xstartup` and the server never starts. Ubuntu 24.04 ships
+no `Xvnc` either. It waits for the display to accept connections, then starts the
+session, and treats the session's death as fatal so a crashed desktop restarts
+the pod rather than leaving a grey screen served over a healthy WebSocket.
+
 Opt-in extras:
 
 | Variable | Default | Effect |
