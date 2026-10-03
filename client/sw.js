@@ -1,11 +1,12 @@
-const CACHE_NAME = 'clouddesktop-v1';
+const CACHE_NAME = 'clouddesktop-v2';
 const PRECACHE = [
-  '/login',
+  '/',
   '/desktop',
-  '/css/login.css',
   '/css/desktop.css',
-  '/js/api.js',
-  '/js/login.js',
+  '/css/notifications.css',
+  '/js/desktop.js',
+  '/js/notifications.js',
+  '/manifest.json',
   '/icon-192.png',
   '/icon-512.png',
   '/icon-192.svg',
@@ -32,8 +33,8 @@ self.addEventListener('activate', (e) => {
 
 self.addEventListener('fetch', (e) => {
   const url = new URL(e.request.url);
-  // Network-first for API calls and websocket
-  if (url.pathname.startsWith('/api/') || url.pathname.startsWith('/ws')) return;
+  // Network-first for the API and the VNC WebSocket; never cache the RFB stream
+  if (url.pathname.startsWith('/api/') || url.pathname.startsWith('/websockify')) return;
   // Cache-first for static assets
   e.respondWith(
     caches.match(e.request).then(cached => cached || fetch(e.request))

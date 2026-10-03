@@ -1,0 +1,116 @@
+# Web client for a TigerVNC/XFCE desktop.
+#
+#   kubectl apply -f deploy/kubernetes.yaml
+#
+# Assumes you already have:
+#   - a pod/deployment running XFCE + TigerVNC + websockify
+#   - a Traefik forwardAuth Middleware (named `desktop-auth` below — rename it)
+#
+# If websockify is exposed by Traefik, set WS_URL so the browser talks to it
+# directly and the built-in WS→TCP bridge is bypassed.
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: desktop-web
+  labels:
+    app.kubernetes.io/name: desktop-web
+spec:
+  selector:
+    app.kubernetes.io/name: desktop-web
+  ports:
+    - name: http
+      port: 3000
+      targetPort: http
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: desktop-web
+  labels:
+    app.kubernetes.io/name: desktop-web
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: desktop-web
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: desktop-web
+    spec:
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+      containers:
+        - name: web
+          image: your-registry/desktop-web:latest
+          imagePullPolicy: IfNotPresent
+          ports:
+            - name: http
+              containerPort: 3000
+          env:
+            # --- VNC backend -------------------------------------------
+            # Use 127.0.0.1 with the built-in bridge when this container is a
+            # sidecar in the same pod as TigerVNC; use the pod IP or a
+            # Service name when it is a separate deployment.
+            - name: VNC_HOST
+              value: "127.0.0.1"
+            - name: VNC_PORT
+              value: "5900"
+            # Point at your websockify route to skip the built-in bridge,
+            # e.g. wss://desktop.example.com/websockify
+            # - name: WS_URL
+            #   value: "wss://desktop.example.com/websockify"
+            # --- X display used for xrandr / xclip / wmctrl ------------
+            - name: DISPLAY
+              value: ":1"
+            # Optional: shell command the dock's "Restart Desktop" button runs.
+            # Leave unset and the button stays hidden.
+            # - name: RESTART_CMD
+            #   value: "pkill -USR1 Xtigervnc"
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          volumeMounts:
+            # Uploads are staged in /tmp before being moved into place
+            - name: tmp
+              mountPath: /tmp
+          resources:
+            requests:
+              cpu: 50m
+              memory: 96Mi
+            limits:
+              memory: 256Mi
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: http
+            initialDelaySeconds: 3
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: http
+            initialDelaySeconds: 10
+      volumes:
+        - name: tmp
+          emptyDir: {}
+---
+# TLS termination and authentication are Traefik's job, not the app's.
+apiVersion: traefik.io/v1alpha1
+kind: IngressRoute
+metadata:
+  name: desktop-web
+spec:
+  entryPoints:
+    - websecure
+  routes:
+    - kind: Rule
+      match: Host(`desktop.example.com`)
+      middlewares:
+        - name: desktop-auth   # your forwardAuth middleware
+      services:
+        - name: desktop-web
+          port: 3000

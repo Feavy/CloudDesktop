@@ -3,14 +3,9 @@ const path = require('path');
 const url = require('url');
 const express = require('express');
 const helmet = require('helmet');
-const cookieParser = require('cookie-parser');
 const config = require('./config');
-const authRoutes = require('./routes/auth');
 const desktopRoutes = require('./routes/desktop');
-const adminRoutes = require('./routes/admin');
-const terminalRoutes = require('./routes/terminal');
-const { createVncWss, authenticateWs } = require('./ws-proxy');
-const { createTerminalWss } = require('./ws-terminal');
+const { createVncWss } = require('./ws-proxy');
 
 const app = express();
 
@@ -19,7 +14,7 @@ app.use(helmet({
   contentSecurityPolicy: {
     directives: {
       defaultSrc: ["'self'"],
-      scriptSrc: ["'self'", "'unsafe-inline'", "https://static.cloudflareinsights.com"],
+      scriptSrc: ["'self'", "'unsafe-inline'"],
       styleSrc: ["'self'", "'unsafe-inline'"],
       imgSrc: ["'self'", "data:", "blob:"],
       connectSrc: ["'self'", "wss:", "ws:"],
@@ -30,26 +25,18 @@ app.use(helmet({
   crossOriginEmbedderPolicy: false,
 }));
 
-// Middleware
 app.use(express.json());
-app.use(cookieParser());
 
-// Trust proxy (behind nginx)
+// Behind the Traefik reverse proxy
 app.set('trust proxy', 1);
 
-// API routes
-app.use('/api/auth', authRoutes);
+// No authentication here: the pod is fronted by Traefik with a forwardAuth
+// middleware, so every request reaching this process is already authorised.
 app.use('/api/desktop', desktopRoutes);
-app.use('/api/admin', adminRoutes);
-app.use('/api/terminal', terminalRoutes);
 
-// Serve vendor files (noVNC + xterm)
+// Serve noVNC
 app.use('/vendor/novnc', express.static(
   path.join(__dirname, '..', 'client', 'vendor', 'novnc'),
-  { maxAge: '7d' }
-));
-app.use('/vendor/xterm', express.static(
-  path.join(__dirname, '..', 'client', 'vendor', 'xterm'),
   { maxAge: '7d' }
 ));
 
@@ -61,21 +48,9 @@ app.use(express.static(path.join(__dirname, '..', 'client'), {
   maxAge: 0,
 }));
 
-// SPA routing: serve app.js routing page for root
-app.get('/', (_req, res) => {
-  res.sendFile(path.join(__dirname, '..', 'client', 'login.html'));
-});
-
-app.get('/desktop', (_req, res) => {
+// The client is a single page
+app.get(['/', '/desktop'], (_req, res) => {
   res.sendFile(path.join(__dirname, '..', 'client', 'desktop.html'));
-});
-
-app.get('/login', (_req, res) => {
-  res.sendFile(path.join(__dirname, '..', 'client', 'login.html'));
-});
-
-app.get('/admin', (_req, res) => {
-  res.sendFile(path.join(__dirname, '..', 'client', 'admin.html'));
 });
 
 // Health check
@@ -83,38 +58,19 @@ app.get('/health', (_req, res) => {
   res.json({ status: 'ok', uptime: process.uptime() });
 });
 
-// Create HTTP server
 const server = http.createServer(app);
 
-// ── WebSocket upgrade dispatcher ─────────────────────────────
-// /websockify → VNC proxy
-// /terminal   → Terminal PTY
+// ── WebSocket upgrade ──────────────────────────────────────
+// /websockify → raw TCP bridge to the VNC server. Unused when the pod is
+// already fronted by websocketify and WS_URL is configured.
 const vncWss = createVncWss();
-const terminalWss = createTerminalWss();
 
 server.on('upgrade', (req, socket, head) => {
   const parsed = url.parse(req.url, true);
 
   if (parsed.pathname === '/websockify') {
-    if (!authenticateWs(req, parsed.query)) {
-      socket.write('HTTP/1.1 401 Unauthorized\r\n\r\n');
-      socket.destroy();
-      return;
-    }
     vncWss.handleUpgrade(req, socket, head, (ws) => {
       vncWss.emit('connection', ws, req);
-    });
-    return;
-  }
-
-  if (parsed.pathname === '/terminal') {
-    if (!authenticateWs(req, parsed.query)) {
-      socket.write('HTTP/1.1 401 Unauthorized\r\n\r\n');
-      socket.destroy();
-      return;
-    }
-    terminalWss.handleUpgrade(req, socket, head, (ws) => {
-      terminalWss.emit('connection', ws, req);
     });
     return;
   }
@@ -122,26 +78,23 @@ server.on('upgrade', (req, socket, head) => {
   socket.destroy();
 });
 
-// Start server
 server.listen(config.PORT, config.HOST, () => {
-  console.log(`CloudDesktop server listening on ${config.HOST}:${config.PORT}`);
+  console.log(`Desktop web client listening on ${config.HOST}:${config.PORT}`);
+  console.log(`  VNC backend : ${config.VNC_HOST}:${config.VNC_PORT}`);
+  console.log(`  X display   : ${config.DISPLAY}`);
+  if (config.WS_URL) console.log(`  WebSocket   : ${config.WS_URL} (external, proxy unused)`);
 });
 
 // Graceful shutdown
-process.on('SIGTERM', () => {
-  console.log('SIGTERM received, shutting down...');
-  server.close(() => process.exit(0));
-  // Force exit if close hangs
-  setTimeout(() => process.exit(0), 5000);
-});
-
-process.on('SIGINT', () => {
-  console.log('SIGINT received, shutting down...');
+function shutdown() {
+  console.log('Shutting down...');
   server.close(() => process.exit(0));
   setTimeout(() => process.exit(0), 5000);
-});
+}
+process.on('SIGTERM', shutdown);
+process.on('SIGINT', shutdown);
 
-// Crash recovery — log and let systemd restart
+// Crash recovery — let the container runtime restart us
 process.on('uncaughtException', (err) => {
   console.error('Uncaught exception:', err);
   process.exit(1);

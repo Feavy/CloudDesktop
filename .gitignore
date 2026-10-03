@@ -1,8 +1,5 @@
 # Dependencies
-server/node_modules/
-
-# Environment / secrets
-data/.env
+node_modules/
 
 # OS files
 .DS_Store
@@ -12,7 +9,6 @@ Thumbs.db
 *.log
 npm-debug.log*
 
-# Temp
-/tmp/
+# Editors
 *.swp
 *.swo

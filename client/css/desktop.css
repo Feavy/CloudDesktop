@@ -563,13 +563,6 @@ body.mobile-fullscreen #vnc-container { inset: 0 !important; }
   border-top: 0.5px solid var(--border);
 }
 
-/* OTP status dot */
-.otp-status-dot {
-  display: inline-block; width: 7px; height: 7px; border-radius: 50%;
-  background: var(--text-muted); margin-left: 6px; vertical-align: middle;
-}
-.otp-status-dot.enabled { background: #30d158; }
-
 /* Modal error / success messages */
 .modal-error {
   font-size: 13px; color: #ff453a; margin-top: 10px;
@@ -583,25 +576,6 @@ body.mobile-fullscreen #vnc-container { inset: 0 !important; }
   border-radius: 8px;
 }
 .modal-success[hidden] { display: none; }
-
-/* OTP setup styles */
-.otp-instructions {
-  font-size: 13px; color: var(--text-muted); margin-bottom: 16px; line-height: 1.5;
-}
-.otp-qr {
-  display: flex; justify-content: center; padding: 16px;
-  background: #fff; border-radius: 12px; margin-bottom: 14px;
-  border: 1px solid var(--border);
-}
-.otp-qr img { width: 180px; height: 180px; }
-.otp-secret-text {
-  font-family: 'SF Mono', 'Menlo', 'Monaco', monospace;
-  font-size: 13px; color: var(--text-bright);
-  background: var(--dock-item-bg); border: 1px solid var(--border);
-  border-radius: 8px; padding: 10px 12px;
-  word-break: break-all; user-select: all; cursor: text;
-  margin-bottom: 4px;
-}
 
 /* ═══════════════════════════════════════════════════════════
    Upload Manager Panel
@@ -962,11 +936,6 @@ body.mobile-fullscreen #vnc-container { inset: 0 !important; }
   }
   .btn-primary, .btn-ghost { padding: 13px 20px; font-size: 15px !important; }
 
-  /* OTP QR smaller on mobile */
-  .otp-qr { padding: 12px; }
-  .otp-qr img { width: 160px; height: 160px; }
-  .otp-secret-text { font-size: 11px; padding: 8px 10px; }
-
   /* Upload manager full width on mobile */
   .upload-manager {
     left: 0; right: 0; width: auto; bottom: 0;
@@ -1166,59 +1135,3 @@ body {
 
 /* VNC container clip when zoomed */
 #vnc-container { overflow: hidden; }
-
-/* ═══════════════════════════════════════════════════════════
-   Admin Panel Modal
-   ═══════════════════════════════════════════════════════════ */
-.admin-modal-card {
-  width: 92vw;
-  max-width: 1100px;
-  height: 85vh;
-  max-height: 85vh;
-  padding: 0;
-  display: flex;
-  flex-direction: column;
-  overflow: hidden;
-}
-.admin-modal-header {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  padding: 10px 16px;
-  border-bottom: 1px solid var(--border);
-  flex-shrink: 0;
-}
-.admin-modal-header h3 { margin: 0; }
-.admin-modal-close-btn {
-  background: none;
-  border: none;
-  color: var(--text-muted);
-  font-size: 22px;
-  cursor: pointer;
-  width: 30px;
-  height: 30px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  border-radius: 6px;
-  transition: background 0.15s;
-}
-.admin-modal-close-btn:hover {
-  background: rgba(255, 255, 255, 0.1);
-  color: var(--text);
-}
-.admin-iframe {
-  flex: 1;
-  width: 100%;
-  border: none;
-  background: var(--bg);
-}
-@media (max-width: 600px) {
-  .admin-modal-card {
-    width: 100vw;
-    height: 100vh;
-    max-height: 100vh;
-    border-radius: 0;
-  }
-}
-

@@ -1,40 +1,10 @@
 const net = require('net');
 const { WebSocketServer } = require('ws');
 const config = require('./config');
-const { consumeWsTicket, verifyToken } = require('./auth');
 
-function parseCookies(cookieHeader) {
-  const cookies = {};
-  if (!cookieHeader) return cookies;
-  cookieHeader.split(';').forEach((cookie) => {
-    const [name, ...rest] = cookie.split('=');
-    cookies[name.trim()] = rest.join('=').trim();
-  });
-  return cookies;
-}
-
-function authenticateWs(req, query) {
-  // Authenticate via ticket (preferred) or token
-  if (query.ticket) {
-    const username = consumeWsTicket(query.ticket);
-    if (username) return true;
-  }
-
-  if (query.token) {
-    try { verifyToken(query.token); return true; } catch {}
-  }
-
-  // Check cookie as fallback
-  if (req.headers.cookie) {
-    const cookies = parseCookies(req.headers.cookie);
-    if (cookies.token) {
-      try { verifyToken(cookies.token); return true; } catch {}
-    }
-  }
-
-  return false;
-}
-
+// Bridges a browser WebSocket to the raw TCP RFB stream of the VNC server.
+// This is only used when WS_URL is unset; when you already run websocketify
+// in front of VNC, set WS_URL and the browser connects to that instead.
 function createVncWss() {
   const wss = new WebSocketServer({
     noServer: true,
@@ -46,10 +16,9 @@ function createVncWss() {
   });
 
   wss.on('connection', (ws) => {
-    // Connect directly to VNC server (raw TCP RFB protocol)
     const target = net.createConnection(config.VNC_PORT, config.VNC_HOST, () => {
       target.setNoDelay(true);
-      console.log('WS proxy: connected to VNC backend');
+      console.log(`WS proxy: connected to VNC backend ${config.VNC_HOST}:${config.VNC_PORT}`);
     });
 
     // Keepalive: ping every 30s to prevent idle disconnects
@@ -76,7 +45,7 @@ function createVncWss() {
       ws.close();
     });
 
-    ws.on('message', (data, isBinary) => {
+    ws.on('message', (data) => {
       if (target.writable) {
         target.write(Buffer.from(data));
       }
@@ -97,4 +66,4 @@ function createVncWss() {
   return wss;
 }
 
-module.exports = { createVncWss, authenticateWs };
+module.exports = { createVncWss };

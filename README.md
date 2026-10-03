@@ -1,190 +1,229 @@
-# CloudDesktop
+# Desktop Web Client
+
+A browser front-end for a **TigerVNC + XFCE** desktop that is already running in a
+Kubernetes pod. It is a noVNC replacement with a proper dock: mobile touch controls,
+clipboard sync, chunked file transfer, resolution switching, an app launcher and a
+window switcher.
 
 <p align="center">
-  <img src="screenshots/desktop.png?v=2" alt="CloudDesktop" width="700">
+  <img src="screenshots/desktop.png" alt="Desktop web client" width="700">
 </p>
 
-<p align="center">
-  <b>Turn any Linux VPS into a full desktop GUI — accessible from any device, anywhere.</b><br>
-  Fully open source. Free forever.
-</p>
-
-<p align="center">
-  <a href="https://github.com/HorusGod007/CloudDesktop/blob/main/LICENSE"><img src="https://img.shields.io/badge/license-MIT-blue.svg" alt="MIT License"></a>
-  <img src="https://img.shields.io/badge/open%20source-100%25-brightgreen" alt="Open Source">
-</p>
+**This service has no authentication and no TLS.** Both are expected to be handled by
+a Traefik reverse proxy in front of it (TLS at the `websecure` entrypoint,
+authentication via a `forwardAuth` middleware). Do not expose it directly.
 
 ---
 
-No PuTTY. No SSH terminals. Just open your browser and you're on your desktop.
+## What was removed
 
-## What is CloudDesktop?
+The original upstream project shipped an installer for bare Ubuntu VPS hosts. This
+fork targets a pod, so that machinery is gone:
 
-CloudDesktop transforms a bare Linux VPS into a complete browser-based desktop environment. It works on **any device** — your phone, tablet, iPad, TV, laptop — all sharing the **same live session**. Start work on your PC, continue on your phone. It's your desktop, everywhere.
+| Removed | Why |
+|---|---|
+| `server/auth.js`, `routes/auth.js`, `middleware/authenticate.js`, `sessions.js` | JWT/bcrypt login — handled by Traefik forwardAuth |
+| TOTP / two-factor setup | Same |
+| `routes/admin.js`, `client/admin.html`, the Control Panel modal | Account/session admin UI with nothing left to administer |
+| `ws-terminal.js`, `routes/terminal.js`, xterm vendor bundle | Browser terminal (already unreferenced by the client) |
+| `audit.js` | Wrote an audit log to disk for a service behind an authenticating proxy |
+| `client/login.html`, `js/login.js`, `css/login.css` | No login screen |
+| Claude Code dock integration | Specific to the upstream author's VPS use case |
+| `install.sh`, `uninstall.sh`, `scripts/`, `config/` (nginx, fail2ban, systemd) | Host installer, firewall and TLS management — not applicable in a pod |
 
-**100% open source** — no hidden fees, no premium tiers, no telemetry. Fork it, modify it, self-host it. It's yours.
+Configuration moved from a `data/.env` file parsed at startup to plain environment
+variables, which is how a pod manifest should express it. There is no `.env` file and
+no secret material to manage.
 
-### Key Features
+## What was kept
 
-- **Universal Access** — Works on any device with a browser. Mobile, tablet, desktop, even smart TVs
-- **Shared Session** — All devices connect to the same live desktop. No sync needed
-- **Trackpad Mode** — RDP-style virtual cursor on mobile. No awkward touch-to-click
-- **Auto-Fit Resolution** — Screen adjusts automatically to your device, orientation changes, and fullscreen
-- **PWA Support** — Install as a native app on Windows, macOS, Linux, iOS, and Android. No browser toolbar — runs like a real desktop app
-- **Claude Code Integration** — Built-in Claude Code CLI support with dedicated dock icons. Launch Claude Code or Claude Fast directly from your desktop
-- **Secure Login** — Password auth with optional TOTP two-factor authentication
-- **File Transfer** — Upload and download files with chunked transfer, pause/resume support
-- **Clipboard Sync** — Copy/paste between your local device and the remote desktop
-- **macOS-style Dock** — App launcher, window switcher, system stats, all in a clean dock
-- **XFCE Desktop** — Lightweight, full-featured Linux desktop with Firefox, Chrome, file manager, and more
-- **SSL/TLS** — Self-signed or Let's Encrypt certificates out of the box
-- **Fail2ban + UFW** — Brute-force protection and firewall configured automatically
+Clipboard sync, chunked file upload/download with pause and resume, resolution
+switching via `xrandr`, the app launcher, the window switcher, CPU/RAM/disk stats, the
+PWA install path, and the mobile touch experience (virtual trackpad cursor, on-screen
+keyboard, pinch zoom, auto-fit resolution).
 
----
+Two small fixes came out of the rewrite:
 
-## Screenshots
-
-| Login | Desktop |
-|-------|---------|
-| ![Login](screenshots/login.png?v=2) | ![Desktop](screenshots/desktop.png?v=2) |
-
-| Settings | Claude Code in Dock |
-|----------|-------------------|
-| ![Settings](screenshots/settings.png?v=2) | ![Claude Code](screenshots/claude.png?v=2) |
-
----
-
-## Quick Install
-
-```bash
-sudo bash install.sh
-```
-
-The installer handles everything:
-- XFCE desktop + TigerVNC
-- noVNC + WebSocket bridge
-- Node.js web backend
-- Nginx reverse proxy with SSL
-- Firewall + Fail2ban
-- Systemd services (auto-start on boot)
-- Claude Code CLI (optional — toggle during install)
-
----
-
-## Claude Code Support
-
-CloudDesktop comes with first-class [Claude Code](https://docs.anthropic.com/en/docs/claude-code) support:
-
-- **Claude Code** — Launch Claude Code CLI in a terminal directly from the dock
-- **Claude Fast** — One-click launch with sandbox mode for quick tasks
-- **Directory Picker** — Choose your working directory before launching
-- Toggle Claude dock icons on/off during install or via config (`CLAUDE_DOCK=true/false`)
-
----
-
-## Requirements
-
-- Ubuntu or Debian Linux
-- 512MB+ RAM (1GB recommended)
-- 1GB+ free disk space
-- Root access
+- The clipboard endpoint waited on Node's `close` event, but `xclip` forks a
+  background process that owns the selection and inherits stdio, so the request never
+  resolved. It now waits on `exit` with detached stdio.
+- `multer` was upgraded from 1.x to 2.x, clearing its outstanding advisories.
 
 ---
 
 ## Architecture
 
 ```
-Browser ──HTTPS──▸ Nginx ──▸ Express API (auth, files, resolution)
-                        └──▸ WebSocket ──▸ websockify ──▸ VNC (TigerVNC/XFCE)
+Browser ──wss──▸ Traefik ──forwardAuth──▸ web client ──TCP──▸ Xtigervnc :5900
+                     │                     (Node/Express)
+                     └── TLS termination
 ```
 
----
+The web client serves the page, the noVNC assets and a small API for the dock
+features. Its `/websockify` endpoint bridges the browser WebSocket to the VNC TCP
+port. If you already run websocketify, set `WS_URL` and that bridge is bypassed.
 
-## Management
+## Building
+
+Two images, depending on what you already have.
+
+**Web client only** — when XFCE/TigerVNC already run in a pod:
 
 ```bash
-# Change password
-sudo bash /opt/OS/scripts/change-password.sh
-
-# Setup SSL with domain
-sudo bash /opt/OS/scripts/setup-ssl.sh yourdomain.com you@email.com
-
-# View logs
-journalctl -u clouddesktop-web -f
-
-# Restart desktop
-sudo systemctl restart clouddesktop-vnc
-
-# Uninstall
-sudo bash /opt/OS/uninstall.sh
+docker build -t your-registry/desktop-web:latest .
 ```
 
+**All-in-one desktop** — when starting from a bare `ubuntu:24.04`:
+
+```bash
+docker build -f Dockerfile.desktop -t your-registry/desktop-full:latest .
+```
+
+`install.sh` installs every prerequisite into a bare Ubuntu image: TigerVNC,
+websockify, XFCE, and — importantly — the X tooling (`xclip`, `wmctrl`, `xrandr`,
+`cvt`) that the web client shells out to. Without those the desktop renders fine
+but silently loses clipboard sync, the window switcher and resolution switching.
+
+```dockerfile
+FROM ubuntu:24.04
+COPY install.sh /tmp/
+RUN bash /tmp/install.sh && rm -rf /var/lib/apt/lists/*
+CMD ["start-desktop"]
+```
+
+It writes two scripts into the image: `/usr/local/bin/start-vnc` (Xtigervnc + XFCE +
+websockify) and `/usr/local/bin/xfce-vnc-session` (the session inside X).
+
+Opt-in extras:
+
+| Variable | Default | Effect |
+|---|---|---|
+| `INSTALL_BROWSERS` | `0` | Google Chrome (the dock's Chrome icon) |
+| `INSTALL_FIREFOX` | `0` | Firefox from Mozilla's APT repo, not Ubuntu's snap wrapper |
+| `INSTALL_DOCS` | `0` | LibreOffice Calc and Writer |
+| `DISPLAY_GEOMETRY` | `1920x1080` | Initial framebuffer size |
+| `VNC_PORT` | `5900` | Raw RFB port (loopback only) |
+| `VNC_WS_PORT` | `6900` | websockify port |
+
+Docker icons for apps that aren't installed are hidden automatically — `canLaunch`
+in `/api/desktop/config` is resolved against `$PATH` at startup, so a minimal image
+simply shows a smaller dock.
+
+### Deployment shapes
+
+**Sidecar in the VNC pod** — add the container to the existing pod spec. Then
+`VNC_HOST=127.0.0.1` works as-is:
+
+```yaml
+containers:
+  - name: desktop
+    # ... your XFCE + TigerVNC + websockify setup
+  - name: web
+    image: your-registry/desktop-web:latest
+    env:
+      - name: VNC_HOST
+        value: "127.0.0.1"
+      - name: VNC_PORT
+        value: "5901"
+      - name: DISPLAY
+        value: ":1"
+    ports:
+      - containerPort: 3000
+```
+
+Note that the app, `xclip`, `wmctrl` and `xrandr` all talk to the same X display, so in
+this shape they must run in the same container as the VNC server (or share its IPC
+namespace and X socket). Otherwise the clipboard, resolution and window features will
+fail while the picture itself keeps working.
+
+**Separate deployment** — run this as its own Deployment and point `VNC_HOST` at the
+VNC pod's IP or Service name. The dock features then shell out in *this* container and
+will not reach the remote X server, so they are best disabled by removing the relevant
+binaries; the picture, dock and touch controls still work.
+
 ---
 
-## Install as App (PWA)
+## Configuration
 
-CloudDesktop can be installed as a standalone app — no browser toolbar, runs like a native desktop application.
+All settings are environment variables.
 
-**Windows / macOS / Linux (Chrome/Edge):**
-1. Open CloudDesktop in Chrome or Edge
-2. Click the install icon in the address bar (or Menu → "Install CloudDesktop")
-3. Done — launches as its own window with no browser UI
+| Variable | Default | Purpose |
+|---|---|---|
+| `HOST` | `0.0.0.0` | Listen address |
+| `PORT` | `3000` | Listen port |
+| `VNC_HOST` | `127.0.0.1` | VNC server to bridge to |
+| `VNC_PORT` | `5900` | VNC TCP port |
+| `WS_URL` | *(unset)* | External `wss://` websockify endpoint; bypasses the built-in bridge |
+| `DISPLAY` | `:1` | X display used for `xrandr`/`xclip`/`wmctrl` |
+| `XAUTHORITY` | `$HOME/.Xauthority` | X authority file |
+| `HOME` | passwd entry | Base for `~/Desktop` and `~/Downloads` |
+| `RESTART_CMD` | *(unset)* | Command run by the dock's Restart button; unset hides the button |
 
-**iPhone / iPad:**
-1. Open in Safari → Tap Share → "Add to Home Screen"
-
-**Android:**
-1. Open in Chrome → Tap "Add to Home Screen" or the install banner
-
----
-
-## Mobile Experience
-
-CloudDesktop is built mobile-first:
-- Virtual trackpad cursor (like Microsoft RD Client)
-- Pinch zoom and scroll
-- On-screen keyboard
-- Fullscreen PWA mode with no browser chrome
-- Auto-resolution fitting for any screen size
-- Resolution auto-adjusts on orientation change
+`RESTART_CMD` replaces the old `systemctl restart clouddesktop-vnc` call — there is no
+service manager in a container, so the deployment decides how to cycle the session. If
+you leave it unset the Restart button is hidden rather than failing.
 
 ---
 
-## Security
+## Deploying
 
-- Bcrypt password hashing
-- JWT session tokens (httpOnly cookies)
-- TOTP two-factor authentication
-- Rate limiting on auth endpoints
-- Fail2ban integration
-- UFW firewall (ports 22, 80, 443 only)
-- HTTPS enforced
+```bash
+docker build -t your-registry/desktop-web:latest .
+docker push your-registry/desktop-web:latest
+kubectl apply -f deploy/kubernetes.yaml
+```
 
----
+Edit `deploy/kubernetes.yaml` first: set the image, the `Host(...)` rule, and the name
+of your existing forwardAuth middleware. The `WS_URL` block is commented out and left
+for you to fill in if websockify is exposed through Traefik.
 
-## Donate
-
-If CloudDesktop is useful to you, consider supporting development:
-
-| Currency | Address |
-|----------|---------|
-| **USDT (TRC20)** | `TWPe2RnNbTLLgn1cfZhHqkzNb46tHxpsCD` |
-| **ETH / ERC-20 Tokens** | `0x1786f09980942725480d4ba67287366e0a90970a` |
-| **BTC** | `1GzK3GrASavA2d7dC7RKEH3aGf1pY1gjHu` |
-| **LTC** | `LeJJjy1PSbUTyNHuLi6QR276sij5C1MT8u` |
+Traefik needs long-lived, unbuffered WebSocket connections to this service. If you
+route through another hop, make sure nothing imposes a short idle timeout — the client
+pings every 30s to stay alive, but intermediate proxies can still cut idle streams.
 
 ---
 
-## Contributing
+## API
 
-CloudDesktop is fully open source and contributions are welcome! Feel free to open issues, submit pull requests, or fork the project.
+All routes are unauthenticated; the reverse proxy gates them.
+
+| Method | Path | Purpose |
+|---|---|---|
+| `GET` | `/health` | Liveness/readiness |
+| `GET` | `/api/desktop/config` | Home dir, VNC endpoint, which dock actions are available |
+| `GET`/`POST` | `/api/desktop/clipboard` | Read/write the X clipboard |
+| `POST` | `/api/desktop/resolution` | Set the X display size, generating a modeline with `cvt` if needed |
+| `POST` | `/api/desktop/restart` | Run `RESTART_CMD`; `501` if unconfigured |
+| `GET` | `/api/desktop/stats` | CPU / RAM / disk |
+| `GET` | `/api/desktop/windows` | List open X windows |
+| `POST` | `/api/desktop/windows/focus` | Raise and focus a window |
+| `POST` | `/api/desktop/launch` | Start an allowlisted app |
+| `POST` | `/api/desktop/upload` | Single-shot upload |
+| `POST` | `/api/desktop/upload/init` `/chunk` `/pause` `/resume` | Chunked upload |
+| `GET` | `/api/desktop/files` | List `~/Desktop` and `~/Downloads` |
+| `GET` | `/api/desktop/browse` | Directory listing |
+| `GET` | `/api/desktop/download` | Download with Range support |
+| `POST` | `/api/desktop/rename` | Rename a file |
+| `WS` | `/websockify` | VNC stream (when `WS_URL` is unset) |
+
+The launcher allowlist is `terminal`, `firefox`, `chrome`, `filemanager` and `editor`,
+hardcoded in `server/routes/desktop.js`. Dock icons for apps missing from that list are
+hidden at runtime.
+
+---
+
+## Development
+
+```bash
+cd server
+npm install
+npm run dev
+```
 
 ---
 
 ## License
 
-This project is licensed under the [MIT License](LICENSE) — free to use, modify, and distribute.
+MIT — see [LICENSE](LICENSE).
 
----
-
-**Built by [HorusGod](https://github.com/HorusGod007)**
+Originally [CloudDesktop](https://github.com/HorusGod007/CloudDesktop) by HorusGod.

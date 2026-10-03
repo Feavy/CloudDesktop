@@ -26,37 +26,21 @@ const isIOS     = /iPad|iPhone|iPod/.test(navigator.userAgent) || (navigator.pla
 const isAndroid = /Android/.test(navigator.userAgent);
 const isMobile  = isTouch && (Math.min(window.innerWidth, window.innerHeight) <= 600);
 
-// ── Auth check ──────────────────────────────────────────────
-
-async function checkAuth() {
-  try {
-    const res = await fetch('/api/auth/verify', { credentials: 'same-origin' });
-    if (!res.ok) { window.location.href = '/login'; return false; }
-    return true;
-  } catch {
-    window.location.href = '/login';
-    return false;
-  }
-}
-
-// ── WS ticket ───────────────────────────────────────────────
-
-async function getWsTicket() {
-  const res = await fetch('/api/auth/ws-ticket', { method: 'POST', credentials: 'same-origin' });
-  if (!res.ok) throw new Error('Failed to get WS ticket');
-  return (await res.json()).ticket;
-}
-
 // ── VNC connect ─────────────────────────────────────────────
 
 async function connect() {
   if (reconnectTimer) { clearTimeout(reconnectTimer); reconnectTimer = null; }
   showStatus('Connecting to desktop…');
 
+  await serverConfigReady;
+
   try {
-    const ticket   = await getWsTicket();
-    const protocol = location.protocol === 'https:' ? 'wss:' : 'ws:';
-    const wsUrl    = `${protocol}//${location.host}/websockify?ticket=${ticket}`;
+    // WS_URL points at an existing websocketify when the pod already runs one;
+    // otherwise fall back to this server's own /websockify → TCP bridge.
+    const wsUrl = SERVER_WS_URL || (() => {
+      const protocol = location.protocol === 'https:' ? 'wss:' : 'ws:';
+      return `${protocol}//${location.host}/websockify`;
+    })();
 
     if (rfb) { rfb.disconnect(); rfb = null; }
 
@@ -93,9 +77,9 @@ function onDisconnect(e) {
 
 function scheduleReconnect() {
   if (reconnectTimer) return;
-  reconnectTimer = setTimeout(async () => {
+  reconnectTimer = setTimeout(() => {
     reconnectTimer = null;
-    if (await checkAuth()) connect();
+    connect();
   }, 3000);
 }
 
@@ -339,57 +323,47 @@ document.getElementById('topbar-theme').addEventListener('click', () => {
 
 // ── App launch helpers ──────────────────────────────────────
 
-async function launchApp(app, cwd) {
+async function launchApp(app) {
   try {
     await fetch('/api/desktop/launch', {
       method: 'POST',
       credentials: 'same-origin',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(cwd ? { app, cwd } : { app }),
+      body: JSON.stringify({ app }),
     });
   } catch { /* silent */ }
 }
 
-// ── Claude directory picker ─────────────────────────────────
-
-// ── Server-side config (home dir, dock options) ─────────────
+// ── Server-side config (home dir, VNC endpoint, dock options) ───────────
 let SERVER_HOME = '/root';
 let SERVER_DESKTOP = '/root/Desktop';
+let SERVER_WS_URL = '';
+let CAN_RESTART = false;
 
-const claudeDirModal  = document.getElementById('claude-dir-modal');
-const claudeDirInput  = document.getElementById('claude-dir-input');
-const claudeDirTitle  = document.getElementById('claude-dir-title');
-let pendingClaudeApp  = null;
-
-claudeDirInput.value = localStorage.getItem('claude-dir') || SERVER_HOME;
-
-document.getElementById('claude-dir-go').addEventListener('click', async () => {
-  const dir = claudeDirInput.value.trim() || SERVER_HOME;
-  localStorage.setItem('claude-dir', dir);
-  claudeDirModal.hidden = true;
-  await launchApp(pendingClaudeApp, dir);
-});
-
-document.getElementById('claude-dir-close').addEventListener('click', () => {
-  claudeDirModal.hidden = true;
-});
-
-claudeDirInput.addEventListener('keydown', (e) => {
-  if (e.key === 'Enter') document.getElementById('claude-dir-go').click();
-});
-
-(async () => {
+// Resolves once the server has told us how to reach VNC and what the dock
+// should offer. connect() awaits this before opening the WebSocket.
+const serverConfigReady = (async () => {
   try {
     const r = await fetch('/api/desktop/config', { credentials: 'same-origin' });
     if (r.ok) {
       const cfg = await r.json();
       if (cfg.homeDir) SERVER_HOME = cfg.homeDir;
       if (cfg.desktopDir) SERVER_DESKTOP = cfg.desktopDir;
-      if (cfg.claudeDock) {
-        document.querySelectorAll('.dock-claude').forEach(el => el.hidden = false);
+      if (cfg.wsUrl) SERVER_WS_URL = cfg.wsUrl;
+
+      // Restarting the desktop needs a command from the deployment; without
+      // one the pod has no way to do it, so hide the button.
+      CAN_RESTART = Boolean(cfg.canRestart);
+      const btnRestart = document.getElementById('btn-restart');
+      if (btnRestart) btnRestart.hidden = !CAN_RESTART;
+
+      // Hide dock icons for apps this pod cannot launch
+      if (Array.isArray(cfg.canLaunch)) {
+        document.querySelectorAll('.dock-app').forEach((btn) => {
+          if (!cfg.canLaunch.includes(btn.dataset.app)) btn.hidden = true;
+        });
       }
-      // Update defaults that depend on home dir
-      if (!localStorage.getItem('claude-dir')) claudeDirInput.value = SERVER_HOME;
+
       if (!localStorage.getItem('upload-dest')) uploadDestInput.value = SERVER_DESKTOP;
     }
   } catch {}
@@ -398,21 +372,7 @@ claudeDirInput.addEventListener('keydown', (e) => {
 // ── Dock app icon clicks ────────────────────────────────────
 
 document.querySelectorAll('.dock-app').forEach((btn) => {
-  btn.addEventListener('click', async () => {
-    const app = btn.dataset.app;
-
-    // Claude apps → show dir picker first
-    if (app === 'claude' || app === 'claude-perf') {
-      pendingClaudeApp         = app;
-      claudeDirTitle.textContent = app === 'claude' ? 'Launch Claude Code' : 'Launch Claude Fast';
-      claudeDirModal.hidden    = false;
-      claudeDirInput.focus();
-      claudeDirInput.select();
-      return;
-    }
-
-    await launchApp(app);
-  });
+  btn.addEventListener('click', () => launchApp(btn.dataset.app));
 });
 
 // ── Drag-and-drop uploads ───────────────────────────────────
@@ -465,7 +425,6 @@ const settingsModal = document.getElementById('settings-modal');
 
 document.getElementById('btn-settings').addEventListener('click', () => {
   settingsModal.hidden = false;
-  refreshOtpStatus();
 });
 document.getElementById('settings-close').addEventListener('click', () => {
   settingsModal.hidden = true;
@@ -490,191 +449,6 @@ topbarBtn.addEventListener('click', () => {
   localStorage.setItem('topbar', topbarVisible ? 'on' : 'off');
   topbarBtn.textContent = topbarVisible ? 'On' : 'Off';
   applyTopbar();
-});
-
-// ── Change Password ─────────────────────────────────────────
-
-const chpwModal    = document.getElementById('chpw-modal');
-const chpwOld      = document.getElementById('chpw-old');
-const chpwNew      = document.getElementById('chpw-new');
-const chpwConfirm  = document.getElementById('chpw-confirm');
-const chpwError    = document.getElementById('chpw-error');
-const chpwSuccess  = document.getElementById('chpw-success');
-
-function chpwReset() {
-  chpwOld.value = ''; chpwNew.value = ''; chpwConfirm.value = '';
-  chpwError.hidden = true; chpwSuccess.hidden = true;
-}
-
-document.getElementById('settings-chpw').addEventListener('click', () => {
-  chpwReset();
-  chpwModal.hidden = false;
-});
-document.getElementById('chpw-close').addEventListener('click', () => {
-  chpwModal.hidden = true;
-});
-
-document.getElementById('chpw-submit').addEventListener('click', async () => {
-  chpwError.hidden = true;
-  chpwSuccess.hidden = true;
-
-  const oldPw = chpwOld.value;
-  const newPw = chpwNew.value;
-  const confirmPw = chpwConfirm.value;
-
-  if (!oldPw || !newPw || !confirmPw) {
-    chpwError.textContent = 'All fields are required';
-    chpwError.hidden = false;
-    return;
-  }
-  if (newPw.length < 8) {
-    chpwError.textContent = 'New password must be at least 8 characters';
-    chpwError.hidden = false;
-    return;
-  }
-  if (newPw !== confirmPw) {
-    chpwError.textContent = 'New passwords do not match';
-    chpwError.hidden = false;
-    return;
-  }
-
-  try {
-    const res = await fetch('/api/auth/change-password', {
-      method: 'POST', credentials: 'same-origin',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ oldPassword: oldPw, newPassword: newPw }),
-    });
-    const data = await res.json().catch(() => ({}));
-    if (res.ok) {
-      chpwSuccess.textContent = 'Password changed successfully';
-      chpwSuccess.hidden = false;
-      chpwOld.value = ''; chpwNew.value = ''; chpwConfirm.value = '';
-    } else {
-      chpwError.textContent = data.error || 'Failed to change password';
-      chpwError.hidden = false;
-    }
-  } catch {
-    chpwError.textContent = 'Connection error';
-    chpwError.hidden = false;
-  }
-});
-
-// ── Two-Factor Auth ─────────────────────────────────────────
-
-const otpToggleBtn    = document.getElementById('settings-otp-toggle');
-const otpStatusDot    = document.getElementById('otp-status-dot');
-const otpSetupModal   = document.getElementById('otp-setup-modal');
-const otpDisableModal = document.getElementById('otp-disable-modal');
-
-let otpEnabled = false;
-
-async function refreshOtpStatus() {
-  try {
-    const res = await fetch('/api/auth/otp/status', { credentials: 'same-origin' });
-    if (res.ok) {
-      const data = await res.json();
-      otpEnabled = data.enabled;
-      otpToggleBtn.textContent = otpEnabled ? 'Disable' : 'Enable';
-      otpStatusDot.classList.toggle('enabled', otpEnabled);
-    }
-  } catch { /* silent */ }
-}
-
-otpToggleBtn.addEventListener('click', () => {
-  if (otpEnabled) {
-    // Disable flow
-    document.getElementById('otp-disable-pw').value = '';
-    document.getElementById('otp-disable-error').hidden = true;
-    otpDisableModal.hidden = false;
-  } else {
-    // Enable flow: call setup first
-    startOtpSetup();
-  }
-});
-
-async function startOtpSetup() {
-  try {
-    const res = await fetch('/api/auth/otp/setup', {
-      method: 'POST', credentials: 'same-origin',
-    });
-    if (!res.ok) return;
-    const data = await res.json();
-    document.getElementById('otp-qr-img').src = data.qr;
-    document.getElementById('otp-secret-text').textContent = data.secret;
-    document.getElementById('otp-verify-code').value = '';
-    document.getElementById('otp-setup-error').hidden = true;
-    otpSetupModal.hidden = false;
-  } catch { /* silent */ }
-}
-
-document.getElementById('otp-verify-btn').addEventListener('click', async () => {
-  const code = document.getElementById('otp-verify-code').value.trim();
-  const errEl = document.getElementById('otp-setup-error');
-  errEl.hidden = true;
-
-  if (!code) {
-    errEl.textContent = 'Enter the 6-digit code';
-    errEl.hidden = false;
-    return;
-  }
-
-  try {
-    const res = await fetch('/api/auth/otp/enable', {
-      method: 'POST', credentials: 'same-origin',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ code }),
-    });
-    const data = await res.json().catch(() => ({}));
-    if (res.ok) {
-      otpSetupModal.hidden = true;
-      refreshOtpStatus();
-    } else {
-      errEl.textContent = data.error || 'Invalid code';
-      errEl.hidden = false;
-    }
-  } catch {
-    errEl.textContent = 'Connection error';
-    errEl.hidden = false;
-  }
-});
-
-document.getElementById('otp-setup-close').addEventListener('click', () => {
-  otpSetupModal.hidden = true;
-});
-
-document.getElementById('otp-disable-btn').addEventListener('click', async () => {
-  const pw = document.getElementById('otp-disable-pw').value;
-  const errEl = document.getElementById('otp-disable-error');
-  errEl.hidden = true;
-
-  if (!pw) {
-    errEl.textContent = 'Password is required';
-    errEl.hidden = false;
-    return;
-  }
-
-  try {
-    const res = await fetch('/api/auth/otp/disable', {
-      method: 'POST', credentials: 'same-origin',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ password: pw }),
-    });
-    const data = await res.json().catch(() => ({}));
-    if (res.ok) {
-      otpDisableModal.hidden = true;
-      refreshOtpStatus();
-    } else {
-      errEl.textContent = data.error || 'Invalid password';
-      errEl.hidden = false;
-    }
-  } catch {
-    errEl.textContent = 'Connection error';
-    errEl.hidden = false;
-  }
-});
-
-document.getElementById('otp-disable-close').addEventListener('click', () => {
-  otpDisableModal.hidden = true;
 });
 
 // ── Resolution modal ────────────────────────────────────────
@@ -722,36 +496,6 @@ document.getElementById('btn-restart').addEventListener('click', async () => {
   try { await fetch('/api/desktop/restart', { method: 'POST', credentials: 'same-origin' }); }
   catch { /* continue */ }
   setTimeout(connect, 4500);
-});
-
-// ── Admin panel ──────────────────────────────────────────────
-
-const adminModal  = document.getElementById('admin-modal');
-const adminIframe = document.getElementById('admin-iframe');
-
-function openAdminPanel() {
-  if (adminModal && adminIframe) {
-    adminIframe.src = '/admin';
-    adminModal.hidden = false;
-  }
-}
-function closeAdminPanel() {
-  if (adminModal) adminModal.hidden = true;
-  if (adminIframe) adminIframe.src = 'about:blank';
-}
-
-const btnAdmin = document.getElementById('btn-admin');
-if (btnAdmin) btnAdmin.addEventListener('click', openAdminPanel);
-
-const btnAdminClose = document.getElementById('admin-modal-close');
-if (btnAdminClose) btnAdminClose.addEventListener('click', closeAdminPanel);
-
-// ── Logout ──────────────────────────────────────────────────
-
-document.getElementById('btn-logout').addEventListener('click', async () => {
-  try { await fetch('/api/auth/logout', { method: 'POST', credentials: 'same-origin' }); }
-  catch { /* continue */ }
-  window.location.href = '/login';
 });
 
 // ── Window switcher ─────────────────────────────────────────
@@ -831,7 +575,7 @@ document.addEventListener('click', (e) => {
 
 // ── Modal dismiss: backdrop click & Escape ──────────────────
 
-const allModals = [resolutionModal, settingsModal, claudeDirModal, uploadModal, dirModal, filebrowserModal, chpwModal, otpSetupModal, otpDisableModal];
+const allModals = [resolutionModal, settingsModal, uploadModal, dirModal, filebrowserModal];
 
 allModals.forEach((modal) => {
   modal.addEventListener('click', (e) => { if (e.target === modal) modal.hidden = true; });
@@ -1972,10 +1716,9 @@ if (isTouch) {
 // ── Init ────────────────────────────────────────────────────
 
 (async function init() {
-  if (await checkAuth()) {
-    // Auto-fit resolution to viewport before connecting
-    await autoFitResolution();
-    await new Promise(r => setTimeout(r, 500));
-    connect();
-  }
+  // Auto-fit resolution to viewport before connecting
+  await serverConfigReady;
+  await autoFitResolution();
+  await new Promise(r => setTimeout(r, 500));
+  connect();
 })();

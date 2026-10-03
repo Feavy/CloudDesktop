@@ -6,24 +6,18 @@ const path = require('path');
 const fs = require('fs');
 const multer = require('multer');
 const config = require('../config');
-const authenticate = require('../middleware/authenticate');
-const audit = require('../audit');
 
 const router = express.Router();
 
-// All desktop routes require authentication
-router.use(authenticate);
-
-// Resolve home directory dynamically (works for root or dedicated user)
-const RUN_HOME = process.env.HOME || os.homedir() || '/root';
-
-// X environment for all xrandr/xclip commands
+// X environment for the xrandr/xclip/wmctrl calls below
 const X_ENV = {
   ...process.env,
   DISPLAY: config.DISPLAY,
-  XAUTHORITY: path.join(RUN_HOME, '.Xauthority'),
-  HOME: RUN_HOME,
+  XAUTHORITY: config.XAUTHORITY,
+  HOME: config.HOME_DIR,
 };
+
+const RUN_HOME = config.HOME_DIR;
 
 const DESKTOP_DIR = path.join(RUN_HOME, 'Desktop');
 const DOWNLOADS_DIR = path.join(RUN_HOME, 'Downloads');
@@ -77,35 +71,34 @@ const ALLOWED_APPS = {
   firefox: { cmd: 'firefox', args: ['--no-remote'] },
   chrome: { cmd: 'google-chrome', args: ['--no-sandbox', '--no-first-run'] },
   filemanager: { cmd: 'thunar', args: [] },
-  claude: { cmd: 'xfce4-terminal', args: ['-x', 'bash', '-c', 'export PATH="$HOME/.local/bin:$PATH"; claude; exec bash'] },
-  'claude-perf': { cmd: 'xfce4-terminal', args: ['-x', 'bash', '-c', 'export PATH="$HOME/.local/bin:$PATH"; export IS_SANDBOX=1; claude --dangerously-skip-permissions; exec bash'] },
   editor: { cmd: 'mousepad', args: [] },
 };
+
+// Only offer dock icons for apps that are actually installed in this pod.
+// A minimal image has no Chrome or Firefox, and a dead icon is worse than a
+// missing one. Resolved once at startup because the package set is static.
+const availableApps = Object.entries(ALLOWED_APPS)
+  .filter(([, app]) => {
+    const found = (process.env.PATH || '').split(':').some((dir) => {
+      if (!dir) return false;
+      try { fs.accessSync(path.join(dir, app.cmd), fs.constants.X_OK); return true; }
+      catch { return false; }
+    });
+    if (!found) console.log(`Dock: '${app.cmd}' not found, hiding its icon`);
+    return found;
+  })
+  .map(([name]) => name);
 
 // GET /api/desktop/config — dock configuration + environment info
 router.get('/config', (_req, res) => {
   res.json({
-    claudeDock: process.env.CLAUDE_DOCK !== 'false',
     homeDir: RUN_HOME,
     desktopDir: DESKTOP_DIR,
-  });
-});
-
-// GET /api/desktop/status
-router.get('/status', (_req, res) => {
-  const checks = {};
-
-  // Check VNC
-  execFile('systemctl', ['is-active', 'clouddesktop-vnc'], (err, stdout) => {
-    checks.vnc = (stdout || '').trim() === 'active';
-
-    // Check web backend
-    execFile('systemctl', ['is-active', 'clouddesktop-web'], (err2, stdout2) => {
-      checks.web = (stdout2 || '').trim() === 'active';
-      checks.allHealthy = checks.vnc && checks.web;
-
-      res.json(checks);
-    });
+    // External websocketify endpoint, or empty to use this server's bridge
+    wsUrl: config.WS_URL,
+    // The dock only offers "restart" when the deployment told us how
+    canRestart: Boolean(config.RESTART_CMD),
+    canLaunch: availableApps,
   });
 });
 
@@ -128,7 +121,6 @@ router.post('/resolution', (req, res) => {
     env: X_ENV,
   }, (err) => {
     if (!err) {
-      audit.log('resolution_change', { width: w, height: h, ip: req.ip });
       return res.json({ ok: true, width: w, height: h });
     }
 
@@ -165,21 +157,20 @@ router.post('/resolution', (req, res) => {
 });
 
 // POST /api/desktop/restart
-router.post('/restart', (req, res) => {
-  audit.log('service_restart', { service: 'clouddesktop-vnc', ip: req.ip });
-  execFile('systemctl', ['restart', 'clouddesktop-vnc'], (err) => {
+//
+// There is no service manager inside the pod, so the command to cycle the VNC
+// server is supplied by the deployment (RESTART_CMD). Without it the dock
+// hides this action entirely.
+router.post('/restart', (_req, res) => {
+  if (!config.RESTART_CMD) {
+    return res.status(501).json({ error: 'Restart is not configured for this deployment' });
+  }
+
+  exec(config.RESTART_CMD, { env: X_ENV }, (err) => {
     if (err) {
-      return res.status(500).json({ error: 'Failed to restart VNC' });
+      return res.status(500).json({ error: 'Failed to restart the desktop session' });
     }
-    // Give VNC a moment to start
-    setTimeout(() => {
-      execFile('systemctl', ['restart', 'clouddesktop-ws'], (err2) => {
-        if (err2) {
-          return res.status(500).json({ error: 'VNC restarted but websockify failed' });
-        }
-        res.json({ ok: true });
-      });
-    }, 2000);
+    res.json({ ok: true });
   });
 });
 
@@ -191,16 +182,21 @@ router.post('/clipboard', (req, res) => {
     return res.status(400).json({ error: 'Text required' });
   }
 
-  // Write to X clipboard using xclip
+  // Write to X clipboard using xclip.
+  //
+  // xclip forks a background process that owns the selection for as long as
+  // the clipboard holds the text, and it inherits any inherited stdio. If we
+  // wait for the 'close' event the request would never resolve, so we use
+  // 'exit' and drop stdout/stderr.
   const proc = spawn('xclip', ['-selection', 'clipboard'], {
     env: X_ENV,
-    stdio: ['pipe', 'pipe', 'pipe'],
+    stdio: ['pipe', 'ignore', 'ignore'],
   });
 
   proc.stdin.write(text);
   proc.stdin.end();
 
-  proc.on('close', (code) => {
+  proc.on('exit', (code) => {
     if (code !== 0) {
       return res.status(500).json({ error: 'Failed to set clipboard' });
     }
@@ -229,7 +225,6 @@ router.post('/upload', upload.single('file'), (req, res) => {
   if (!req.file) {
     return res.status(400).json({ error: 'No file provided' });
   }
-  audit.log('file_upload', { filename: req.file.filename, size: req.file.size, ip: req.ip });
   res.json({ ok: true, filename: req.file.filename, size: req.file.size });
 });
 
@@ -363,7 +358,7 @@ router.get('/stats', (_req, res) => {
 
 // POST /api/desktop/launch — launch allowlisted app
 router.post('/launch', (req, res) => {
-  const { app, cwd } = req.body;
+  const { app } = req.body;
 
   if (!app || !ALLOWED_APPS[app]) {
     return res.status(400).json({
@@ -371,30 +366,13 @@ router.post('/launch', (req, res) => {
     });
   }
 
-  // Determine working directory for claude apps
-  let workDir = undefined;
-  if (cwd && (app === 'claude' || app === 'claude-perf')) {
-    // Sanitize: must be absolute path, no null bytes
-    const cleanPath = path.resolve(cwd.replace(/\0/g, ''));
-    // Create directory if it doesn't exist
-    try {
-      fs.mkdirSync(cleanPath, { recursive: true });
-    } catch (e) {
-      return res.status(400).json({ error: `Cannot create directory: ${e.message}` });
-    }
-    workDir = cleanPath;
-  }
-
   const { cmd, args } = ALLOWED_APPS[app];
 
-  const spawnOpts = {
+  const child = spawn(cmd, args, {
     env: X_ENV,
     detached: true,
     stdio: 'ignore',
-  };
-  if (workDir) spawnOpts.cwd = workDir;
-
-  const child = spawn(cmd, args, spawnOpts);
+  });
 
   child.unref();
 
@@ -404,7 +382,6 @@ router.post('/launch', (req, res) => {
 
   // Give it a moment to see if it fails immediately
   setTimeout(() => {
-    audit.log('app_launch', { app, cwd: workDir, ip: req.ip });
     res.json({ ok: true, app });
   }, 300);
 });

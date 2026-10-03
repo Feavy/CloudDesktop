@@ -1,81 +1,57 @@
-const fs = require('fs');
+// Runtime configuration.
+//
+// Everything is read from process.env so the pod's Deployment/StatefulSet
+// manifest is the single source of truth. Authentication and TLS are
+// deliberately absent: they are handled by the Traefik reverse proxy in
+// front of this service (forwardAuth middleware).
+const os = require('os');
 const path = require('path');
-const crypto = require('crypto');
 
-const ENV_PATH = path.join(__dirname, '..', 'data', '.env');
-
-function loadEnv() {
-  const env = {};
-  if (fs.existsSync(ENV_PATH)) {
-    const lines = fs.readFileSync(ENV_PATH, 'utf8').split('\n');
-    for (const line of lines) {
-      const trimmed = line.trim();
-      if (!trimmed || trimmed.startsWith('#')) continue;
-      const idx = trimmed.indexOf('=');
-      if (idx === -1) continue;
-      const key = trimmed.slice(0, idx).trim();
-      let val = trimmed.slice(idx + 1).trim();
-      if ((val.startsWith('"') && val.endsWith('"')) ||
-          (val.startsWith("'") && val.endsWith("'"))) {
-        val = val.slice(1, -1);
-      }
-      env[key] = val;
-    }
-  }
-  return env;
+function int(value, fallback) {
+  const n = parseInt(value, 10);
+  return Number.isFinite(n) ? n : fallback;
 }
 
-function updateEnv(key, val) {
-  let content = '';
-  if (fs.existsSync(ENV_PATH)) {
-    content = fs.readFileSync(ENV_PATH, 'utf8');
+// In a container HOME is frequently unset or `/`; fall back to the passwd entry
+// so paths like ~/Desktop used by the file-transfer API still resolve.
+function resolveHome() {
+  if (process.env.HOME && process.env.HOME !== '/') return process.env.HOME;
+  try {
+    const info = os.userInfo();
+    return info.homedir || '/root';
+  } catch {
+    return '/root';
   }
-  const lines = content.split('\n');
-  let found = false;
-  for (let i = 0; i < lines.length; i++) {
-    const trimmed = lines[i].trim();
-    if (!trimmed || trimmed.startsWith('#')) continue;
-    const idx = trimmed.indexOf('=');
-    if (idx === -1) continue;
-    const k = trimmed.slice(0, idx).trim();
-    if (k === key) {
-      lines[i] = `${key}=${val}`;
-      found = true;
-      break;
-    }
-  }
-  if (!found) {
-    lines.push(`${key}=${val}`);
-  }
-  fs.writeFileSync(ENV_PATH, lines.join('\n'));
 }
 
-const env = loadEnv();
+const HOME_DIR = resolveHome();
 
-const config = {
-  PORT: parseInt(env.PORT || process.env.PORT || '3000', 10),
-  HOST: env.HOST || process.env.HOST || '127.0.0.1',
-  JWT_SECRET: env.JWT_SECRET || process.env.JWT_SECRET || crypto.randomBytes(32).toString('hex'),
-  JWT_EXPIRY: env.JWT_EXPIRY || process.env.JWT_EXPIRY || '24h',
-  PASSWORD_HASH: env.PASSWORD_HASH || process.env.PASSWORD_HASH || '',
-  USERNAME: env.USERNAME || process.env.CD_USERNAME || 'admin',
-  VNC_HOST: env.VNC_HOST || process.env.VNC_HOST || '127.0.0.1',
-  VNC_PORT: parseInt(env.VNC_PORT || process.env.VNC_PORT || '6080', 10),
-  WS_TICKET_EXPIRY: parseInt(env.WS_TICKET_EXPIRY || '30', 10),
-  DISPLAY: env.DISPLAY || process.env.DISPLAY || ':1',
-  LOG_LEVEL: env.LOG_LEVEL || process.env.LOG_LEVEL || 'info',
-  OTP_SECRET: env.OTP_SECRET || '',
-  OTP_ENABLED: (env.OTP_ENABLED || 'false').toLowerCase() === 'true',
+module.exports = {
+  PORT: int(process.env.PORT, 3000),
+  HOST: process.env.HOST || '0.0.0.0',
+
+  // VNC backend. The WebSocket proxy dials this address directly over TCP.
+  VNC_HOST: process.env.VNC_HOST || '127.0.0.1',
+  VNC_PORT: int(process.env.VNC_PORT, 5901),
+
+  // X display used by xrandr/xclip/wmctrl for resolution, clipboard and
+  // window management.
+  DISPLAY: process.env.DISPLAY || ':1',
+
+  // WebSocket endpoint the browser uses for the VNC stream.
+  //
+  // If you already run websocketify in front of TigerVNC (and expose it
+  // through Traefik), set WS_URL to that absolute wss:// URL and this
+  // process' built-in WS→TCP bridge is bypassed entirely.
+  //
+  // Leave it unset to use this server's own /websockify bridge.
+  WS_URL: process.env.WS_URL || '',
+
+  HOME_DIR,
+  XAUTHORITY: process.env.XAUTHORITY || path.join(HOME_DIR, '.Xauthority'),
+
+  // Optional shell command used by POST /api/desktop/restart. There is no
+  // systemd in a container, so restarting the VNC server is deployment-specific.
+  // Leave unset to hide the dock's restart button.
+  RESTART_CMD: process.env.RESTART_CMD || '',
 };
-
-function reloadConfig() {
-  const fresh = loadEnv();
-  config.PASSWORD_HASH = fresh.PASSWORD_HASH || process.env.PASSWORD_HASH || '';
-  config.OTP_SECRET = fresh.OTP_SECRET || '';
-  config.OTP_ENABLED = (fresh.OTP_ENABLED || 'false').toLowerCase() === 'true';
-}
-
-config.updateEnv = updateEnv;
-config.reloadConfig = reloadConfig;
-
-module.exports = config;

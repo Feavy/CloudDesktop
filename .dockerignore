@@ -1,0 +1,8 @@
+server/node_modules
+node_modules
+.git
+.gitignore
+screenshots
+*.md
+LICENSE
+Dockerfile.desktop
