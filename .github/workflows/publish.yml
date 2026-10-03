@@ -9,7 +9,14 @@ name: Publish images
 #   ghcr.io/<owner>/clouddesktop-desktop  all-in-one (XFCE + TigerVNC +
 #                                         websockify + web client)
 #
-# Pull requests build both images to verify they still work, but never push.
+# Tags produced:
+#   main / v* push : <branch>, latest (on main), and semver tags
+#   pull request   : pr-<number> and sha-<short>  -- snapshot tags for testing
+#                    before merge. `latest` is never produced from a PR.
+#
+# Pull requests from forks are built but NOT pushed: GitHub issues those runs a
+# read-only GITHUB_TOKEN, so the push would fail. Open the PR inside this repo
+# to get a testable snapshot.
 
 on:
   push:
@@ -36,6 +43,8 @@ permissions:
   packages: write
 
 concurrency:
+  # Stable per-PR group, so a superseded run is cancelled rather than racing to
+  # overwrite the same pr-<number> tag.
   group: publish-${{ github.ref }}
   cancel-in-progress: true
 
@@ -46,22 +55,49 @@ jobs:
     outputs:
       owner: ${{ steps.vars.outputs.owner }}
       push: ${{ steps.vars.outputs.push }}
+      reason: ${{ steps.vars.outputs.reason }}
     steps:
       - id: vars
+        env:
+          EVENT: ${{ github.event_name }}
+          HEAD_REPO: ${{ github.event.pull_request.head.repo.full_name }}
+          BASE_REPO: ${{ github.repository }}
+          DISPATCH_PUSH: ${{ inputs.push }}
         run: |
           # GHCR requires a lowercase owner; GitHub exposes the original casing.
-          owner=$(echo '${{ github.repository_owner }}' | tr '[:upper:]' '[:lower:]')
+          owner=$(echo "${{ github.repository_owner }}" | tr '[:upper:]' '[:lower:]')
           echo "owner=$owner" >> "$GITHUB_OUTPUT"
 
-          # Push on branch/tag pushes and on an explicit dispatch. Never on a PR.
           push=false
-          if [ '${{ github.event_name }}' = "push" ]; then
+          reason="no push requested"
+
+          if [ "$EVENT" = "push" ]; then
             push=true
-          elif [ '${{ github.event_name }}' = "workflow_dispatch" ]; then
-            push='${{ inputs.push }}'
+            reason="push to ${GITHUB_REF_NAME}"
+          elif [ "$EVENT" = "workflow_dispatch" ]; then
+            push="$DISPATCH_PUSH"
+            reason="manual dispatch (push=${DISPATCH_PUSH})"
+          elif [ "$EVENT" = "pull_request" ]; then
+            if [ -n "$HEAD_REPO" ] && [ "$HEAD_REPO" = "$BASE_REPO" ]; then
+              push=true
+              reason="pull request snapshot from this repo"
+            else
+              push=false
+              reason="pull request from a fork (${HEAD_REPO:-unknown}) - token is read-only, building only"
+            fi
           fi
-          echo "push=$push" >> "$GITHUB_OUTPUT"
-          echo "owner=$owner push=$push" >> "$GITHUB_STEP_SUMMARY"
+
+          echo "push=$push"     >> "$GITHUB_OUTPUT"
+          echo "reason=$reason" >> "$GITHUB_OUTPUT"
+          {
+            echo "### Registry resolution"
+            echo ""
+            echo "| field | value |"
+            echo "|---|---|"
+            echo "| owner | \`$owner\` |"
+            echo "| push | \`$push\` |"
+            echo "| reason | $reason |"
+          } >> "$GITHUB_STEP_SUMMARY"
 
   build:
     name: Build ${{ matrix.image.name }}
@@ -69,6 +105,7 @@ jobs:
     # push step below is what honours needs.prep.outputs.push.
     needs: prep
     runs-on: ubuntu-latest
+    timeout-minutes: 90
     strategy:
       fail-fast: false
       matrix:
@@ -90,7 +127,9 @@ jobs:
         uses: docker/setup-buildx-action@v3
 
       - name: Log in to ${{ env.REGISTRY }}
-        # Only log in when we intend to push; a PR build has no packages:write.
+        # Only when we intend to push. A fork pull request gets a read-only
+        # token, and attempting to log in there would fail the job rather than
+        # just skipping the push.
         if: needs.prep.outputs.push == 'true'
         uses: docker/login-action@v3
         with:
@@ -106,8 +145,11 @@ jobs:
           tags: |
             type=ref,event=branch
             type=ref,event=pr
+            type=sha,format=short
             type=semver,pattern={{version}}
             type=semver,pattern={{major}}.{{minor}}
+            # Gated on the default branch, so a pull request can never
+            # overwrite :latest with an unmerged snapshot.
             type=raw,value=latest,enable={{is_default_branch}}
 
       - name: Build and push
@@ -130,11 +172,27 @@ jobs:
 
       - name: Summarise
         if: always()
+        env:
+          PUSHED: ${{ needs.prep.outputs.push }}
+          REASON: ${{ needs.prep.outputs.reason }}
+          TAGS: ${{ steps.meta.outputs.tags }}
+          IMAGE: ${{ matrix.image.name }}
+          OWNER: ${{ needs.prep.outputs.owner }}
         run: |
           {
-            echo "### ${{ matrix.image.name }}"
+            echo "### \`$IMAGE\`"
+            echo ""
+            echo "push: \`$PUSHED\` — $REASON"
             echo ""
             echo '```'
-            echo "${{ steps.meta.outputs.tags }}"
+            echo "$TAGS"
             echo '```'
+            if [ "$PUSHED" = "true" ] && [ '${{ github.event_name }}' = "pull_request" ]; then
+              echo ""
+              echo "Test before merging:"
+              echo ""
+              echo '```bash'
+              echo "kubectl set image deployment/desktop-web web=ghcr.io/$OWNER/$IMAGE:pr-${{ github.event.pull_request.number }} -n <namespace>"
+              echo "```"
+            fi
           } >> "$GITHUB_STEP_SUMMARY"

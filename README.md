@@ -176,9 +176,28 @@ the workflow's own `GITHUB_TOKEN`:
 | `ghcr.io/feavy/clouddesktop-web` | Web client only (for an existing XFCE/TigerVNC pod) |
 | `ghcr.io/feavy/clouddesktop-desktop` | All-in-one: XFCE + TigerVNC + websockify + web client |
 
-Every push to `main` rebuilds and republishes both, tagged with the branch name plus
-`latest`. Pushing a `v*` tag also produces `v1.2.3` and `v1.2` tags. Pull requests
-build both images to catch breakage but never push.
+| Event | Tags produced |
+|---|---|
+| Push to `main` | `main`, `latest` |
+| Push a `v*` tag | `v1.2.3`, `v1.2`, `latest` |
+| Pull request | `pr-<number>`, `sha-<short>` — never `latest` |
+| Manual dispatch | as per branch, with a push/no-push checkbox |
+
+**Testing a pull request before merging.** Open the PR inside this repository and the
+workflow publishes a snapshot under a `pr-<number>` tag. Point a deployment at it:
+
+```bash
+kubectl set image deployment/desktop-web web=ghcr.io/feavy/clouddesktop-web:pr-42 -n <namespace>
+```
+
+`pr-<number>` is overwritten by each new commit on that PR, so `kubectl rollout
+restart deployment/desktop-web` always pulls the newest snapshot. The workflow's
+summary shows the exact tags to use, and appends the `kubectl set image` command
+when it pushed one.
+
+A PR opened from a **fork** is built but not pushed: GitHub issues those runs a
+read-only `GITHUB_TOKEN`, so there is nothing to authenticate the push with. Open
+the PR against this repository instead if you need a snapshot.
 
 To publish by hand: **Actions → Publish images → Run workflow**.
 
