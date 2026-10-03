@@ -44,8 +44,10 @@ spec:
         runAsUser: 1000
       containers:
         - name: web
-          image: your-registry/desktop-web:latest
-          imagePullPolicy: IfNotPresent
+          # Published to GHCR by .github/workflows/publish.yml on every push
+          # to main. Swap the owner if you fork this again.
+          image: ghcr.io/feavy/clouddesktop-web:latest
+          imagePullPolicy: Always
           ports:
             - name: http
               containerPort: 3000

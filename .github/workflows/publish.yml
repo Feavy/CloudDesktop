@@ -1,0 +1,140 @@
+name: Publish images
+
+# Builds the container images and pushes them to this project's GitHub
+# Container Registry (ghcr.io). No registry credentials are needed: the
+# workflow uses the automatically-issued GITHUB_TOKEN.
+#
+#   ghcr.io/<owner>/clouddesktop-web      web client only (needs an existing
+#                                         XFCE/TigerVNC pod)
+#   ghcr.io/<owner>/clouddesktop-desktop  all-in-one (XFCE + TigerVNC +
+#                                         websockify + web client)
+#
+# Pull requests build both images to verify they still work, but never push.
+
+on:
+  push:
+    branches: [main]
+    tags: ["v*"]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      push:
+        description: "Push the images to the registry"
+        type: boolean
+        default: true
+      platforms:
+        description: "Target platforms (multi-arch builds are slow)"
+        type: string
+        default: "linux/amd64"
+
+env:
+  REGISTRY: ghcr.io
+
+permissions:
+  contents: read
+  packages: write
+
+concurrency:
+  group: publish-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  prep:
+    name: Resolve registry coordinates
+    runs-on: ubuntu-latest
+    outputs:
+      owner: ${{ steps.vars.outputs.owner }}
+      push: ${{ steps.vars.outputs.push }}
+    steps:
+      - id: vars
+        run: |
+          # GHCR requires a lowercase owner; GitHub exposes the original casing.
+          owner=$(echo '${{ github.repository_owner }}' | tr '[:upper:]' '[:lower:]')
+          echo "owner=$owner" >> "$GITHUB_OUTPUT"
+
+          # Push on branch/tag pushes and on an explicit dispatch. Never on a PR.
+          push=false
+          if [ '${{ github.event_name }}' = "push" ]; then
+            push=true
+          elif [ '${{ github.event_name }}' = "workflow_dispatch" ]; then
+            push='${{ inputs.push }}'
+          fi
+          echo "push=$push" >> "$GITHUB_OUTPUT"
+          echo "owner=$owner push=$push" >> "$GITHUB_STEP_SUMMARY"
+
+  build:
+    name: Build ${{ matrix.image.name }}
+    # Runs on pull requests too, to catch a broken build before merge. The
+    # push step below is what honours needs.prep.outputs.push.
+    needs: prep
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        image:
+          - name: clouddesktop-web
+            dockerfile: Dockerfile
+            context: .
+          - name: clouddesktop-desktop
+            dockerfile: Dockerfile.desktop
+            context: .
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up QEMU
+        if: contains(inputs.platforms || 'linux/amd64', 'arm64')
+        uses: docker/setup-qemu-action@v3
+
+      - name: Set up Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to ${{ env.REGISTRY }}
+        # Only log in when we intend to push; a PR build has no packages:write.
+        if: needs.prep.outputs.push == 'true'
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Compute image tags
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.REGISTRY }}/${{ needs.prep.outputs.owner }}/${{ matrix.image.name }}
+          tags: |
+            type=ref,event=branch
+            type=ref,event=pr
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
+            type=raw,value=latest,enable={{is_default_branch}}
+
+      - name: Build and push
+        uses: docker/build-push-action@v6
+        with:
+          context: ${{ matrix.image.context }}
+          file: ${{ matrix.image.dockerfile }}
+          platforms: ${{ inputs.platforms || 'linux/amd64' }}
+          push: ${{ needs.prep.outputs.push == 'true' }}
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          # The all-in-one image installs XFCE and is multi-gigabyte; without
+          # this every rebuild starts from scratch.
+          cache-from: type=gha,scope=${{ matrix.image.name }}
+          cache-to: type=gha,mode=max,scope=${{ matrix.image.name }}
+          # Provenance/SBOM attestations build an extra manifest that older
+          # containerd cannot resolve by tag, which breaks `kubectl pull`.
+          provenance: false
+          sbom: false
+
+      - name: Summarise
+        if: always()
+        run: |
+          {
+            echo "### ${{ matrix.image.name }}"
+            echo ""
+            echo '```'
+            echo "${{ steps.meta.outputs.tags }}"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"

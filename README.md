@@ -70,13 +70,13 @@ Two images, depending on what you already have.
 **Web client only** — when XFCE/TigerVNC already run in a pod:
 
 ```bash
-docker build -t your-registry/desktop-web:latest .
+docker build -t clouddesktop-web:latest .
 ```
 
 **All-in-one desktop** — when starting from a bare `ubuntu:24.04`:
 
 ```bash
-docker build -f Dockerfile.desktop -t your-registry/desktop-full:latest .
+docker build -f Dockerfile.desktop -t clouddesktop-desktop:latest .
 ```
 
 `install.sh` installs every prerequisite into a bare Ubuntu image: TigerVNC,
@@ -167,9 +167,22 @@ you leave it unset the Restart button is hidden rather than failing.
 
 ## Deploying
 
+Images are published automatically to GitHub Container Registry by
+`.github/workflows/publish.yml` — no registry secrets needed, it authenticates with
+the workflow's own `GITHUB_TOKEN`:
+
+| Image | Contents |
+|---|---|
+| `ghcr.io/feavy/clouddesktop-web` | Web client only (for an existing XFCE/TigerVNC pod) |
+| `ghcr.io/feavy/clouddesktop-desktop` | All-in-one: XFCE + TigerVNC + websockify + web client |
+
+Every push to `main` rebuilds and republishes both, tagged with the branch name plus
+`latest`. Pushing a `v*` tag also produces `v1.2.3` and `v1.2` tags. Pull requests
+build both images to catch breakage but never push.
+
+To publish by hand: **Actions → Publish images → Run workflow**.
+
 ```bash
-docker build -t your-registry/desktop-web:latest .
-docker push your-registry/desktop-web:latest
 kubectl apply -f deploy/kubernetes.yaml
 ```
 
