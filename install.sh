@@ -11,6 +11,9 @@
 #  Traefik reverse proxy in front of it.
 #
 #  Optional extras are opt-in via environment variables:
+#    INSTALL_NODE=0       skip Node.js (only if the web client is a separate
+#                         deployment; it defaults to on)
+#    NODE_MAJOR=22        NodeSource major version to install
 #    INSTALL_BROWSERS=1   Google Chrome (the dock's "Chrome" icon)
 #    INSTALL_FIREFOX=1    Firefox
 #    INSTALL_DOCS=1       LibreOffice
@@ -32,6 +35,14 @@ VNC_DISPLAY="${VNC_DISPLAY:-:1}"
 log()  { echo -e "\033[0;32m[+]\033[0m $*"; }
 warn() { echo -e "\033[1;33m[!]\033[0m $*"; }
 die()  { echo -e "\033[0;31m[x]\033[0m $*" >&2; exit 1; }
+
+# Assert a binary the image depends on actually exists, naming the package that
+# provides it so a failure says where to look instead of just what is missing.
+# Defined up here because the Node step below is the first thing to call it.
+check_bin() {
+    command -v "$1" >/dev/null 2>&1 \
+        || die "'$1' is missing after install. It should come from '$2'."
+}
 
 [ "$(id -u)" -eq 0 ] || die "Must run as root (use docker build as root, or sudo)."
 . /etc/os-release
@@ -80,7 +91,41 @@ fi
 locale -a | grep -qi '^en_US\.utf-\?8$' || die "en_US.UTF-8 locale unavailable"
 
 # ─────────────────────────────────────────────────────────────────────────────
-# 3. X server plumbing
+# 3. Node.js runtime (needed by the web client)
+#
+#    Ubuntu 24.04 ships Node 18, which reached end of life in April 2025, so
+#    take the current LTS from NodeSource instead. Set INSTALL_NODE=0 if this
+#    image is a desktop-only pod and the web client lives elsewhere.
+# ─────────────────────────────────────────────────────────────────────────────
+if [ "${INSTALL_NODE:-1}" = "1" ]; then
+    NODE_MAJOR="${NODE_MAJOR:-22}"
+    log "Installing Node.js ${NODE_MAJOR}.x from NodeSource"
+
+    # Keyring install rather than `curl | bash`, so apt verifies the repo key
+    # and the image does not run a fetched script as root.
+    install -d -m 0755 /etc/apt/keyrings
+    curl -fsSL https://deb.nodesource.com/gpgkey/nodesource-repo.gpg.key \
+        | gpg --dearmor --yes -o /etc/apt/keyrings/nodesource.gpg
+    chmod 0644 /etc/apt/keyrings/nodesource.gpg
+
+    # `nodistro` keeps this working across Ubuntu point releases without
+    # having to track the codename.
+    echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/nodesource.gpg] https://deb.nodesource.com/node_${NODE_MAJOR}.x nodistro main" \
+        > /etc/apt/sources.list.d/nodesource.list
+
+    apt-get update -qq
+    apt-get install -y -qq nodejs
+
+    # The repo is no longer needed once the packages are installed.
+    rm -f /etc/apt/sources.list.d/nodesource.list /etc/apt/keyrings/nodesource.gpg
+
+    check_bin node nodejs
+    check_bin npm  nodejs
+    log "Node: $(node --version)  npm: $(npm --version)"
+fi
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 4. X server plumbing
 #
 #    NOTE: this is the part the web client silently depends on. It shells out
 #    to xclip, wmctrl, xrandr and cvt, so a container missing these renders the
@@ -107,11 +152,6 @@ apt-get install -y -qq --no-install-recommends \
 # Ubuntu splits these across more packages than you would expect -- `cvt` is in
 # `xcvt`, not `x11-xserver-utils` -- and a missing one fails silently at
 # runtime as a dock button that does nothing, so fail the build instead.
-check_bin() {
-    command -v "$1" >/dev/null 2>&1 \
-        || die "'$1' is missing after install. It should come from '$2'."
-}
-
 check_bin xrandr     x11-xserver-utils
 check_bin cvt        xcvt
 check_bin xclip      xclip
@@ -122,7 +162,7 @@ check_bin dbus-launch dbus-x11
 log "X tooling verified (xrandr, cvt, xclip, wmctrl, xauth, xdpyinfo, dbus-launch)"
 
 # ─────────────────────────────────────────────────────────────────────────────
-# 4. TigerVNC + websockify
+# 5. TigerVNC + websockify
 # ─────────────────────────────────────────────────────────────────────────────
 log "Installing TigerVNC and websockify"
 apt-get install -y -qq --no-install-recommends \
@@ -136,7 +176,7 @@ check_bin websockify websockify
 log "Xtigervnc: $(Xtigervnc -version 2>&1 | head -1)"
 
 # ─────────────────────────────────────────────────────────────────────────────
-# 5. XFCE desktop
+# 6. XFCE desktop
 # ─────────────────────────────────────────────────────────────────────────────
 log "Installing XFCE (this is the bulk of the image)"
 apt-get install -y -qq \
@@ -170,7 +210,7 @@ check_bin autocutsel     autocutsel
 log "XFCE verified"
 
 # ─────────────────────────────────────────────────────────────────────────────
-# 6. Optional extras
+# 7. Optional extras
 # ─────────────────────────────────────────────────────────────────────────────
 if [ "${INSTALL_BROWSERS:-0}" = "1" ]; then
     log "Installing Google Chrome"
@@ -200,7 +240,7 @@ if [ "${INSTALL_DOCS:-0}" = "1" ]; then
 fi
 
 # ─────────────────────────────────────────────────────────────────────────────
-# 7. X startup script
+# 8. X startup script
 #
 #    Xtigervnc runs this instead of a bare X server. Without it you get a grey
 #    screen with no session.
@@ -239,7 +279,7 @@ SESSION
 chmod +x /usr/local/bin/xfce-vnc-session
 
 # ─────────────────────────────────────────────────────────────────────────────
-# 8. Xtigervnc launcher
+# 9. Xtigervnc launcher
 #
 #    -SecurityTypes None is deliberate: the browser client has no VNC password
 #    field and sends an empty credential. If you enable VNC auth you must also
@@ -314,12 +354,12 @@ STARTVNC
 chmod +x /usr/local/bin/start-vnc
 
 # ─────────────────────────────────────────────────────────────────────────────
-# 9. Wrap Xtigervnc's own launcher so `startvnc` behaves predictably
+# 10. Wrap Xtigervnc's own launcher so `startvnc` behaves predictably
 # ─────────────────────────────────────────────────────────────────────────────
 ln -sf /usr/local/bin/start-vnc /usr/local/bin/start-desktop
 
 # ─────────────────────────────────────────────────────────────────────────────
-# 10. Cleanup
+# 11. Cleanup
 # ─────────────────────────────────────────────────────────────────────────────
 log "Cleaning apt cache"
 apt-get clean
@@ -340,6 +380,9 @@ cat <<SUMMARY
     display   ${VNC_DISPLAY}  ${VNC_GEOMETRY} depth ${VNC_DEPTH}
     RFB       :${VNC_PORT}  (loopback only)
     websocket :${VNC_WS_PORT}  (bound to 0.0.0.0)
+
+  Installed runtimes:
+$(if [ "${INSTALL_NODE:-1}" = "1" ]; then echo "    node       $(node --version), npm $(npm --version)"; fi)
 
   CMD ["start-vnc"]
 

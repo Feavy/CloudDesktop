@@ -98,6 +98,8 @@ Opt-in extras:
 
 | Variable | Default | Effect |
 |---|---|---|
+| `INSTALL_NODE` | `1` | Install Node.js from NodeSource (Ubuntu's own is 18, EOL) |
+| `NODE_MAJOR` | `22` | NodeSource major version |
 | `INSTALL_BROWSERS` | `0` | Google Chrome (the dock's Chrome icon) |
 | `INSTALL_FIREFOX` | `0` | Firefox from Mozilla's APT repo, not Ubuntu's snap wrapper |
 | `INSTALL_DOCS` | `0` | LibreOffice Calc and Writer |
