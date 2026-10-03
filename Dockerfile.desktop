@@ -10,11 +10,13 @@ FROM ubuntu:24.04
 
 ENV DEBIAN_FRONTEND=noninteractive \
     LANG=en_US.UTF-8 \
-    HOME=/home/desktop \
     VNC_DISPLAY=:1 \
     VNC_PORT=5900 \
     VNC_WS_PORT=6900 \
     DISPLAY_GEOMETRY=1920x1080
+
+# HOME is not set here on purpose: start-vnc derives it from the passwd entry,
+# so DESKTOP_USER stays the single place that decides which user we run as.
 
 # INSTALL_NODE=0 because the desktop does not need a JS runtime. Everything
 # else -- including the xclip/wmctrl/xrandr/cvt tooling the web client shells
@@ -31,10 +33,11 @@ EXPOSE 6900
 HEALTHCHECK --interval=30s --timeout=3s --start-period=20s --retries=3 \
   CMD bash -c 'exec 3<>/dev/tcp/127.0.0.1/${VNC_WS_PORT:-6900}' || exit 1
 
-# Unprivileged. install.sh created this user and gave it a writable $HOME for
-# .Xauthority, ~/.vnc and D-Bus sockets; Xtigervnc and XFCE both refuse to
-# work properly as root and would leave root-owned files behind.
-USER desktop
+# Unprivileged. install.sh reuses the image's stock `ubuntu` user by default and
+# gave it a writable $HOME for .Xauthority, ~/.vnc and D-Bus sockets;
+# Xtigervnc and XFCE both refuse to work properly as root and would leave
+# root-owned files behind.
+USER ubuntu
 
 # tini reaps the X, dbus and websockify children that start-desktop forks
 ENTRYPOINT ["/usr/bin/tini", "--"]

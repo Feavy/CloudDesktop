@@ -58,6 +58,11 @@ spec:
             # Where the file transfer reads and writes (~/Desktop, ~/Downloads).
             # Must be writable: readOnlyRootFilesystem is on below, and the
             # upload endpoint creates these directories on first use.
+            #
+            # For clouddesktop-client this is simply a writable scratch home;
+            # node:alpine's own home is /home/node. For clouddesktop-full, set
+            # this to the passwd home of the user install.sh settled on
+            # (/home/ubuntu by default) and mount the volume there instead.
             - name: HOME
               value: "/home/desktop"
             # --- VNC backend -------------------------------------------
@@ -76,9 +81,11 @@ spec:
             - name: DISPLAY
               value: ":1"
             # Optional: shell command the dock's "Restart Desktop" button runs.
-            # Leave unset and the button stays hidden.
+            # Leave unset and the button stays hidden. Only valid when the
+            # client shares a container with the VNC server; sudo is
+            # available passwordless in clouddesktop-desktop and -full.
             # - name: RESTART_CMD
-            #   value: "pkill -USR1 Xtigervnc"
+            #   value: "sudo pkill -USR1 Xtigervnc"
           securityContext:
             allowPrivilegeEscalation: false
             readOnlyRootFilesystem: true

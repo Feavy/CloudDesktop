@@ -119,25 +119,55 @@ simply shows a smaller dock.
 
 ### Running as a non-root user
 
-`clouddesktop-desktop` and `clouddesktop-full` both run as an unprivileged
-`desktop` user (uid 1000), never root. `install.sh` creates it and gives it a
-writable `$HOME` for the files an X desktop needs — `.Xauthority`, `~/.vnc` and
-D-Bus sockets. Override with `DESKTOP_USER`, `DESKTOP_UID` and `DESKTOP_GID`.
+`clouddesktop-desktop` and `clouddesktop-full` both run as an unprivileged user,
+never root. By default they **reuse the `ubuntu` user that `ubuntu:24.04` already
+provides** (uid 1000), rather than deleting it and creating a second one.
+`install.sh` gives it a writable `$HOME` containing what an X desktop needs —
+`.Xauthority`, `~/.vnc`, and the `Desktop`/`Downloads` directories the file
+transfer API uses.
 
-This matters for correctness, not just for principle: `ubuntu:24.04` ships an
-unprivileged `ubuntu` user at uid 1000, which collides with the default, so
-`install.sh` removes it. Running the desktop as root works until the second
-start, at which point root-owned files in the home directory break the session.
+Override with `DESKTOP_USER` (and `DESKTOP_UID`/`DESKTOP_GID` if creating a new
+one). If a custom name doesn't exist yet and the requested uid is taken,
+`install.sh` removes the occupant to make room.
 
-In the full image the web client deliberately shares that same uid, because it
+`HOME` is never hardcoded in the Dockerfiles: `start-vnc` and `entrypoint.sh`
+each read it from the passwd entry, so `DESKTOP_USER` stays the single place that
+decides who we run as and the web client's file paths follow automatically.
+
+In the full image the web client deliberately runs as that same user, because it
 shells out to `xclip`/`wmctrl`/`xrandr` against the same X display and reads the
-`.Xauthority` that `Xtigervnc` wrote — same uid, so that works.
+`.Xauthority` that `Xtigervnc` wrote.
 
-`start-vnc` refuses to run as root and fails with a clear message rather than
-half-starting.
+`start-vnc` refuses to run as root, and fails early with a clear message if
+`HOME` is unset or unwritable rather than starting into a black screen.
+
+#### Passwordless sudo
+
+The runtime user gets `NOPASSWD: ALL`, which is what lets the desktop fix things
+it cannot fix as itself:
+
+- removing `/tmp/.X*-lock` files left behind by a previous container layer under
+  a different uid
+- recreating `/tmp/.X11-unix` when `/tmp` arrives as a fresh `emptyDir` mount
+- `RESTART_CMD`, which can now recycle the VNC stack — set it to
+  `sudo pkill -USR1 Xtigervnc` to re-exec the X server in place
+
+`start-vnc` probes for working sudo once at startup and falls back to doing those
+steps unprivileged if it is unavailable, so removing the sudoers drop-in
+degrades rather than breaks.
+
+**This is root-equivalent for anyone who can execute code as this user.** The web
+client exposes file download and directory browse over HTTP, so the reverse
+proxy's `forwardAuth` is the boundary protecting it — do not expose the pod
+directly. To narrow the blast radius, replace `NOPASSWD: ALL` in
+`/etc/sudoers.d/<user>` (written by `install.sh`) with an explicit command list:
+
+```
+ubuntu ALL=(root) NOPASSWD: /usr/bin/pkill, /bin/rm -f /tmp/.X*-lock, /bin/mkdir -p /tmp/.X11-unix
+```
 
 If you enable `readOnlyRootFilesystem` (the manifest does), you **must** mount a
-writable volume at the home directory: the file transfer API creates and writes
+writable volume at `$HOME`: the file transfer API creates and writes
 `$HOME/Desktop` and `$HOME/Downloads`. The manifest does this with an `emptyDir`
 plus `fsGroup: 1000`; swap in a PersistentVolumeClaim if uploaded files should
 survive a restart.

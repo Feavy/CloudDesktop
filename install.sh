@@ -78,7 +78,7 @@ apt-get update -qq
 apt-get install -y -qq --no-install-recommends \
     ca-certificates curl wget gnupg apt-transport-https \
     locales tzdata keyboard-configuration xkb-data \
-    procps psmisc tini
+    procps psmisc tini sudo
 
 # The locales postinst should have generated this from the seed above; generate
 # it by hand only if it somehow did not.
@@ -246,20 +246,25 @@ fi
 #    writable $HOME for .Xauthority, ~/.vnc and D-Bus sockets, and running as
 #    root would leave root-owned files that break the next start.
 #
-#    ubuntu:24.04 already ships an unprivileged `ubuntu` user at uid 1000,
-#    which collides with the default DESKTOP_UID, so remove it first.
+#    ubuntu:24.04 already ships an unprivileged `ubuntu` user at uid 1000, so
+#    reuse it by default rather than deleting it and creating a second one.
+#    Set DESKTOP_USER to pick a different name; if that name does not exist yet
+#    and the requested uid is taken, the occupant is removed to make room.
 # ─────────────────────────────────────────────────────────────────────────────
-DESKTOP_USER="${DESKTOP_USER:-desktop}"
+DESKTOP_USER="${DESKTOP_USER:-ubuntu}"
 DESKTOP_UID="${DESKTOP_UID:-1000}"
 DESKTOP_GID="${DESKTOP_GID:-1000}"
 
-existing_user="$(getent passwd "$DESKTOP_UID" | cut -d: -f1 || true)"
-if [ -n "$existing_user" ] && [ "$existing_user" != "$DESKTOP_USER" ]; then
-    log "uid $DESKTOP_UID is taken by '$existing_user'; removing it"
-    userdel -r "$existing_user" >/dev/null 2>&1 || userdel "$existing_user" >/dev/null 2>&1 || true
-fi
-
-if ! id -u "$DESKTOP_USER" >/dev/null 2>&1; then
+if id -u "$DESKTOP_USER" >/dev/null 2>&1; then
+    log "Reusing existing user '$DESKTOP_USER'"
+    DESKTOP_UID="$(id -u "$DESKTOP_USER")"
+    DESKTOP_GID="$(id -g "$DESKTOP_USER")"
+else
+    existing_user="$(getent passwd "$DESKTOP_UID" | cut -d: -f1 || true)"
+    if [ -n "$existing_user" ]; then
+        log "uid $DESKTOP_UID is taken by '$existing_user'; removing it to make room for '$DESKTOP_USER'"
+        userdel -r "$existing_user" >/dev/null 2>&1 || userdel "$existing_user" >/dev/null 2>&1 || true
+    fi
     log "Creating unprivileged user '$DESKTOP_USER' (uid $DESKTOP_UID)"
     groupadd -f -g "$DESKTOP_GID" "$DESKTOP_USER"
     useradd -m -u "$DESKTOP_UID" -g "$DESKTOP_GID" -s /bin/bash "$DESKTOP_USER"
@@ -278,7 +283,30 @@ chown -R "${DESKTOP_UID}:${DESKTOP_GID}" "$DESKTOP_HOME"
 mkdir -p /tmp/.X11-unix
 chmod 1777 /tmp/.X11-unix
 
-log "Runtime user: $DESKTOP_USER (uid $DESKTOP_UID), home $DESKTOP_HOME"
+# Passwordless sudo for the runtime user.
+#
+# This is what lets the desktop recover from things it cannot fix as itself:
+# stale /tmp/.X*-lock files left by a previous container layer under a
+# different uid, recreating /tmp/.X11-unix when /tmp arrives as a fresh mount,
+# and the web client's RESTART_CMD (recycling Xtigervnc and websockify).
+#
+# SECURITY: this is root-equivalent for anyone who can execute code as this
+# user. The web client exposes file download and directory browse over HTTP, so
+# treat the reverse proxy's authentication as the boundary that protects it.
+# To narrow the blast radius, replace NOPASSWD:ALL below with an explicit
+# command list, for example:
+#
+#   ${DESKTOP_USER} ALL=(root) NOPASSWD: /usr/bin/pkill, /bin/rm -f /tmp/.X*-lock
+#
+usermod -aG sudo "$DESKTOP_USER"
+cat > "/etc/sudoers.d/${DESKTOP_USER}" <<SUDOERS
+# Managed by install.sh - desktop runtime user.
+Defaults:${DESKTOP_USER} !requiretty
+${DESKTOP_USER} ALL=(ALL) NOPASSWD: ALL
+SUDOERS
+chmod 0440 "/etc/sudoers.d/${DESKTOP_USER}"
+
+log "Runtime user: $DESKTOP_USER (uid $DESKTOP_UID), home $DESKTOP_HOME, passwordless sudo"
 
 # ─────────────────────────────────────────────────────────────────────────────
 # 9. X startup script
@@ -349,8 +377,16 @@ WS_PORT="${VNC_WS_PORT:-6900}"
 # user's home that break the next start. Fail loudly rather than half-working.
 if [ "$(id -u)" -eq 0 ]; then
     echo "Refusing to start the desktop as root." >&2
-    echo "Run the container with USER ${DESKTOP_USER:-desktop} instead." >&2
+    echo "Run the container as an unprivileged user (USER ubuntu, the default) instead." >&2
     exit 1
+fi
+
+# Derive HOME from the passwd entry rather than trusting the environment. This
+# keeps working whichever user DESKTOP_USER resolved to, with no matching ENV in
+# the Dockerfile to keep in sync.
+PW_HOME="$(getent passwd "$(id -un)" | cut -d: -f6)"
+if [ -n "$PW_HOME" ]; then
+    export HOME="$PW_HOME"
 fi
 
 # $HOME must be writable: Xtigervnc writes .Xauthority there and the web client
@@ -361,13 +397,27 @@ if [ ! -w "$HOME" ]; then
     exit 1
 fi
 
-# X11 socket dir. Created at build time with the sticky bit; create it here too
-# in case /tmp was mounted fresh.
-mkdir -p /tmp/.X11-unix && chmod 1777 /tmp/.X11-unix 2>/dev/null || true
+# Run as root when we can. Passwordless sudo is configured by install.sh, and
+# these two steps genuinely need it: /tmp may arrive as a fresh emptyDir mount
+# with nothing in it, and the X lock files can be owned by a different uid from
+# a previous container layer. Falls back to doing it unprivileged.
+SUDO=""
+if command -v sudo >/dev/null 2>&1 && sudo -n true 2>/dev/null; then
+    SUDO="sudo"
+fi
 
-# Clear stale locks from an unclean shutdown. These may be owned by another
-# uid from a previous container layer, so failure here is not fatal.
-rm -f "/tmp/.X${DISPLAY_NUM#:}-lock" "/tmp/.X11-unix/X${DISPLAY_NUM#:}" 2>/dev/null || true
+# X11 socket dir. Created at build time with the sticky bit; recreate it here
+# in case /tmp was mounted fresh.
+if [ ! -d /tmp/.X11-unix ]; then
+    $SUDO mkdir -p /tmp/.X11-unix 2>/dev/null || mkdir -p /tmp/.X11-unix 2>/dev/null || true
+fi
+$SUDO chmod 1777 /tmp/.X11-unix 2>/dev/null || chmod 1777 /tmp/.X11-unix 2>/dev/null || true
+
+# Clear stale locks from an unclean shutdown. Failure is not fatal: if a lock is
+# owned by another uid and sudo is unavailable, X reports it and exits, which is
+# a clearer failure than starting on a display someone else holds.
+$SUDO rm -f "/tmp/.X${DISPLAY_NUM#:}-lock" "/tmp/.X11-unix/X${DISPLAY_NUM#:}" 2>/dev/null \
+    || rm -f "/tmp/.X${DISPLAY_NUM#:}-lock" "/tmp/.X11-unix/X${DISPLAY_NUM#:}" 2>/dev/null || true
 
 export DISPLAY="$DISPLAY_NUM"
 export HOME

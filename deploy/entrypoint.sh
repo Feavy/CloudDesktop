@@ -12,6 +12,23 @@
 # ============================================================================
 set -uo pipefail
 
+# The web client resolves its file-transfer paths from $HOME, and the desktop
+# needs it for .Xauthority. Neither image hardcodes a path, because which user
+# install.sh settled on is configurable; read it from the passwd entry so both
+# processes agree and no ENV in the Dockerfile has to be kept in sync.
+PW_HOME="$(getent passwd "$(id -un)" 2>/dev/null | cut -d: -f6 || true)"
+if [ -n "${PW_HOME:-}" ]; then
+    export HOME="$PW_HOME"
+fi
+
+# The upload endpoint creates ~/Desktop on demand, but with a read-only root
+# filesystem it cannot; create it up front so uploads fail loudly at startup
+# rather than silently at request time.
+if [ -n "${HOME:-}" ] && [ -d "$HOME" ]; then
+    mkdir -p "$HOME/Desktop" "$HOME/Downloads" 2>/dev/null || \
+        echo "warning: cannot create \$HOME/Desktop; file transfer will fail" >&2
+fi
+
 WEB_PID=""
 DESK_PID=""
 
