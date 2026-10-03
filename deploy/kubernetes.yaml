@@ -42,6 +42,9 @@ spec:
       securityContext:
         runAsNonRoot: true
         runAsUser: 1000
+        # Gives the emptyDir volumes below group ownership so uid 1000 can
+        # write to them, which is what makes the non-root setup work.
+        fsGroup: 1000
       containers:
         - name: web
           # Published to GHCR by .github/workflows/publish.yml on every push
@@ -52,6 +55,11 @@ spec:
             - name: http
               containerPort: 3000
           env:
+            # Where the file transfer reads and writes (~/Desktop, ~/Downloads).
+            # Must be writable: readOnlyRootFilesystem is on below, and the
+            # upload endpoint creates these directories on first use.
+            - name: HOME
+              value: "/home/desktop"
             # --- VNC backend -------------------------------------------
             # Use 127.0.0.1 with the built-in bridge when this container is a
             # sidecar in the same pod as TigerVNC; use the pod IP or a
@@ -80,6 +88,12 @@ spec:
             # Uploads are staged in /tmp before being moved into place
             - name: tmp
               mountPath: /tmp
+            # HOME. Required because readOnlyRootFilesystem is on, and the
+            # file transfer writes to $HOME/Desktop and $HOME/Downloads.
+            # Use a PersistentVolumeClaim instead of emptyDir if you want
+            # uploaded files to survive a restart.
+            - name: home
+              mountPath: /home/desktop
           resources:
             requests:
               cpu: 50m
@@ -98,6 +112,8 @@ spec:
             initialDelaySeconds: 10
       volumes:
         - name: tmp
+          emptyDir: {}
+        - name: home
           emptyDir: {}
 ---
 # TLS termination and authentication are Traefik's job, not the app's.

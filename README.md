@@ -117,6 +117,31 @@ Docker icons for apps that aren't installed are hidden automatically — `canLau
 in `/api/desktop/config` is resolved against `$PATH` at startup, so a minimal image
 simply shows a smaller dock.
 
+### Running as a non-root user
+
+`clouddesktop-desktop` and `clouddesktop-full` both run as an unprivileged
+`desktop` user (uid 1000), never root. `install.sh` creates it and gives it a
+writable `$HOME` for the files an X desktop needs — `.Xauthority`, `~/.vnc` and
+D-Bus sockets. Override with `DESKTOP_USER`, `DESKTOP_UID` and `DESKTOP_GID`.
+
+This matters for correctness, not just for principle: `ubuntu:24.04` ships an
+unprivileged `ubuntu` user at uid 1000, which collides with the default, so
+`install.sh` removes it. Running the desktop as root works until the second
+start, at which point root-owned files in the home directory break the session.
+
+In the full image the web client deliberately shares that same uid, because it
+shells out to `xclip`/`wmctrl`/`xrandr` against the same X display and reads the
+`.Xauthority` that `Xtigervnc` wrote — same uid, so that works.
+
+`start-vnc` refuses to run as root and fails with a clear message rather than
+half-starting.
+
+If you enable `readOnlyRootFilesystem` (the manifest does), you **must** mount a
+writable volume at the home directory: the file transfer API creates and writes
+`$HOME/Desktop` and `$HOME/Downloads`. The manifest does this with an `emptyDir`
+plus `fsGroup: 1000`; swap in a PersistentVolumeClaim if uploaded files should
+survive a restart.
+
 ### Deployment shapes
 
 **One container** — `clouddesktop-full`. Nothing to wire up:

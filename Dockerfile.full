@@ -29,6 +29,7 @@ RUN chmod +x /usr/local/bin/entrypoint
 ENV NODE_ENV=production \
     HOST=0.0.0.0 \
     PORT=3000 \
+    HOME=/home/desktop \
     DISPLAY=:1 \
     VNC_HOST=127.0.0.1 \
     VNC_PORT=5900
@@ -38,6 +39,11 @@ EXPOSE 3000 6900
 
 HEALTHCHECK --interval=30s --timeout=3s --start-period=20s --retries=3 \
   CMD node -e "fetch('http://127.0.0.1:3000/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"
+
+# Unprivileged, and deliberately the same user as the desktop: the web client
+# shells out to xclip/wmctrl/xrandr against the same X display, and reads the
+# .Xauthority that Xtigervnc wrote. Same uid, so that works.
+USER desktop
 
 # tini reaps the X, dbus and websockify children that the launcher forks
 ENTRYPOINT ["/usr/bin/tini", "--", "/usr/local/bin/entrypoint"]

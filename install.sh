@@ -240,7 +240,48 @@ if [ "${INSTALL_DOCS:-0}" = "1" ]; then
 fi
 
 # ─────────────────────────────────────────────────────────────────────────────
-# 8. X startup script
+# 8. Unprivileged runtime user
+#
+#    The desktop runs as this user, not root. Xtigervnc and XFCE both want a
+#    writable $HOME for .Xauthority, ~/.vnc and D-Bus sockets, and running as
+#    root would leave root-owned files that break the next start.
+#
+#    ubuntu:24.04 already ships an unprivileged `ubuntu` user at uid 1000,
+#    which collides with the default DESKTOP_UID, so remove it first.
+# ─────────────────────────────────────────────────────────────────────────────
+DESKTOP_USER="${DESKTOP_USER:-desktop}"
+DESKTOP_UID="${DESKTOP_UID:-1000}"
+DESKTOP_GID="${DESKTOP_GID:-1000}"
+
+existing_user="$(getent passwd "$DESKTOP_UID" | cut -d: -f1 || true)"
+if [ -n "$existing_user" ] && [ "$existing_user" != "$DESKTOP_USER" ]; then
+    log "uid $DESKTOP_UID is taken by '$existing_user'; removing it"
+    userdel -r "$existing_user" >/dev/null 2>&1 || userdel "$existing_user" >/dev/null 2>&1 || true
+fi
+
+if ! id -u "$DESKTOP_USER" >/dev/null 2>&1; then
+    log "Creating unprivileged user '$DESKTOP_USER' (uid $DESKTOP_UID)"
+    groupadd -f -g "$DESKTOP_GID" "$DESKTOP_USER"
+    useradd -m -u "$DESKTOP_UID" -g "$DESKTOP_GID" -s /bin/bash "$DESKTOP_USER"
+fi
+
+DESKTOP_HOME="$(getent passwd "$DESKTOP_USER" | cut -d: -f6)"
+
+# ~/Desktop and ~/Downloads are where the web client's file transfer reads and
+# writes, so they must exist and be owned by the runtime user.
+mkdir -p "$DESKTOP_HOME/Desktop" "$DESKTOP_HOME/Downloads" "$DESKTOP_HOME/.vnc"
+chown -R "${DESKTOP_UID}:${DESKTOP_GID}" "$DESKTOP_HOME"
+
+# X11 unix sockets. X creates /tmp/.X11-unix itself but needs the directory to
+# exist and be sticky; as non-root it cannot create it if the parent is not
+# writable at build time.
+mkdir -p /tmp/.X11-unix
+chmod 1777 /tmp/.X11-unix
+
+log "Runtime user: $DESKTOP_USER (uid $DESKTOP_UID), home $DESKTOP_HOME"
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 9. X startup script
 #
 #    Xtigervnc runs this instead of a bare X server. Without it you get a grey
 #    screen with no session.
@@ -248,12 +289,19 @@ fi
 log "Writing XFCE VNC session startup script"
 cat > /usr/local/bin/xfce-vnc-session <<'SESSION'
 #!/bin/bash
-# Started by Xtigervnc via -xstartup. Runs the desktop inside the X server.
+# Started by Xtigervnc via -xstartup. Runs the desktop inside the X server,
+# as the unprivileged desktop user.
 
-# A per-uid D-Bus socket dir; $XDG_RUNTIME_DIR is often unset in containers.
+# A per-uid D-Bus socket dir; $XDG_RUNTIME_DIR is often unset in containers,
+# and /run/user/<uid> does not exist because logind is not running. /tmp is
+# world-writable, so it is the only dependable place for this.
 export XDG_RUNTIME_DIR="${XDG_RUNTIME_DIR:-/tmp/runtime-$(id -u)}"
 mkdir -p "$XDG_RUNTIME_DIR"
 chmod 700 "$XDG_RUNTIME_DIR"
+
+# The web client reads $HOME/.Xauthority to reach this same X server, and the
+# X server wrote it, so both sides are the same user and can read it.
+export XAUTHORITY="${XAUTHORITY:-$HOME/.Xauthority}"
 
 # Give the session its own D-Bus. XFCE panels and thunar need one.
 if [ -z "$DBUS_SESSION_BUS_ADDRESS" ]; then
@@ -279,7 +327,7 @@ SESSION
 chmod +x /usr/local/bin/xfce-vnc-session
 
 # ─────────────────────────────────────────────────────────────────────────────
-# 9. Xtigervnc launcher
+# 10. Xtigervnc launcher
 #
 #    -SecurityTypes None is deliberate: the browser client has no VNC password
 #    field and sends an empty credential. If you enable VNC auth you must also
@@ -288,7 +336,7 @@ chmod +x /usr/local/bin/xfce-vnc-session
 log "Writing Xtigervnc launcher"
 cat > /usr/local/bin/start-vnc <<'STARTVNC'
 #!/bin/bash
-# Start Xtigervnc with the XFCE session on DISPLAY.
+# Start Xtigervnc with the XFCE session on DISPLAY, as an unprivileged user.
 set -euo pipefail
 
 DISPLAY_NUM="${VNC_DISPLAY:-:1}"
@@ -297,10 +345,34 @@ DEPTH="${VNC_DEPTH:-24}"
 RFB_PORT="${VNC_PORT:-5900}"
 WS_PORT="${VNC_WS_PORT:-6900}"
 
-# Clear stale locks from an unclean shutdown
+# Nothing here needs root, and running as root leaves root-owned files in the
+# user's home that break the next start. Fail loudly rather than half-working.
+if [ "$(id -u)" -eq 0 ]; then
+    echo "Refusing to start the desktop as root." >&2
+    echo "Run the container with USER ${DESKTOP_USER:-desktop} instead." >&2
+    exit 1
+fi
+
+# $HOME must be writable: Xtigervnc writes .Xauthority there and the web client
+# reads it back. A root-owned home is the usual cause of a black screen.
+: "${HOME:?HOME must be set for the desktop user}"
+if [ ! -w "$HOME" ]; then
+    echo "HOME ($HOME) is not writable by $(id -un)." >&2
+    exit 1
+fi
+
+# X11 socket dir. Created at build time with the sticky bit; create it here too
+# in case /tmp was mounted fresh.
+mkdir -p /tmp/.X11-unix && chmod 1777 /tmp/.X11-unix 2>/dev/null || true
+
+# Clear stale locks from an unclean shutdown. These may be owned by another
+# uid from a previous container layer, so failure here is not fatal.
 rm -f "/tmp/.X${DISPLAY_NUM#:}-lock" "/tmp/.X11-unix/X${DISPLAY_NUM#:}" 2>/dev/null || true
 
 export DISPLAY="$DISPLAY_NUM"
+export HOME
+export XDG_RUNTIME_DIR="${XDG_RUNTIME_DIR:-/tmp/runtime-$(id -u)}"
+mkdir -p "$XDG_RUNTIME_DIR" && chmod 700 "$XDG_RUNTIME_DIR"
 
 Xtigervnc "$DISPLAY_NUM" \
     -geometry "$GEOMETRY" \
@@ -354,12 +426,12 @@ STARTVNC
 chmod +x /usr/local/bin/start-vnc
 
 # ─────────────────────────────────────────────────────────────────────────────
-# 10. Wrap Xtigervnc's own launcher so `startvnc` behaves predictably
+# 11. Wrap Xtigervnc's own launcher so `startvnc` behaves predictably
 # ─────────────────────────────────────────────────────────────────────────────
 ln -sf /usr/local/bin/start-vnc /usr/local/bin/start-desktop
 
 # ─────────────────────────────────────────────────────────────────────────────
-# 11. Cleanup
+# 12. Cleanup
 # ─────────────────────────────────────────────────────────────────────────────
 log "Cleaning apt cache"
 apt-get clean
