@@ -93,7 +93,9 @@ apt-get install -y -qq --no-install-recommends \
     x11-utils \
     xauth \
     xclip \
+    xcvt \
     wmctrl \
+    autocutsel \
     xserver-xorg-input-all \
     xserver-xorg-input-libinput \
     xkb-data \
@@ -101,13 +103,23 @@ apt-get install -y -qq --no-install-recommends \
     dbus-x11 \
     policykit-1
 
-# `cvt` (modeline generation) and `xrandr` come from x11-xserver-utils.
-# `vncconfig` and `Xvnc` come from tigervnc-common.
-# `dbus-launch` comes from dbus-x11.
-for bin in xrandr cvt xclip wmctrl xauth xdpyinfo dbus-launch; do
-    command -v "$bin" >/dev/null 2>&1 || die "expected '$bin' after install but it is missing"
-done
-log "X tooling verified: $(command -v xrandr) / $(command -v xclip) / $(command -v wmctrl)"
+# Verify every binary the web client and the session scripts actually invoke.
+# Ubuntu splits these across more packages than you would expect -- `cvt` is in
+# `xcvt`, not `x11-xserver-utils` -- and a missing one fails silently at
+# runtime as a dock button that does nothing, so fail the build instead.
+check_bin() {
+    command -v "$1" >/dev/null 2>&1 \
+        || die "'$1' is missing after install. It should come from '$2'."
+}
+
+check_bin xrandr     x11-xserver-utils
+check_bin cvt        xcvt
+check_bin xclip      xclip
+check_bin wmctrl     wmctrl
+check_bin xauth      xauth
+check_bin xdpyinfo   x11-utils
+check_bin dbus-launch dbus-x11
+log "X tooling verified (xrandr, cvt, xclip, wmctrl, xauth, xdpyinfo, dbus-launch)"
 
 # ─────────────────────────────────────────────────────────────────────────────
 # 4. TigerVNC + websockify
@@ -118,7 +130,9 @@ apt-get install -y -qq --no-install-recommends \
     tigervnc-common \
     websockify
 
-command -v Xtigervnc >/dev/null 2>&1 || die "Xtigervnc not found after install"
+check_bin Xtigervnc   tigervnc-standalone-server
+check_bin vncconfig  tigervnc-common
+check_bin websockify websockify
 log "Xtigervnc: $(Xtigervnc -version 2>&1 | head -1)"
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -143,6 +157,17 @@ apt-get install -y -qq --no-install-recommends \
     fonts-noto-color-emoji \
     fontconfig
 fc-cache -f >/dev/null 2>&1 || true
+
+# These back the dock icons and the session itself. The web client resolves its
+# dock against $PATH at startup, so a missing one silently shrinks the dock
+# rather than erroring.
+check_bin startxfce4     xfce4
+check_bin xfce4-session  xfce4
+check_bin xfce4-terminal xfce4-terminal
+check_bin thunar         thunar
+check_bin mousepad       mousepad
+check_bin autocutsel     autocutsel
+log "XFCE verified"
 
 # ─────────────────────────────────────────────────────────────────────────────
 # 6. Optional extras
