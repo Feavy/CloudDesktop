@@ -1434,43 +1434,36 @@ if (isTouch) {
     return vncContainer.querySelector('canvas');
   }
 
-  // Monkey-patch setPointerCapture so synthetic events don't throw
-  function patchCanvas(canvas) {
-    if (canvas._trackpadPatched) return;
-    canvas._trackpadPatched = true;
-    const origSet = canvas.setPointerCapture.bind(canvas);
-    const origRel = canvas.releasePointerCapture.bind(canvas);
-    canvas.setPointerCapture = (id) => { try { origSet(id); } catch {} };
-    canvas.releasePointerCapture = (id) => { try { origRel(id); } catch {} };
-  }
-
-  // Dispatch synthetic PointerEvent to noVNC canvas
-  function sendPointer(type, button, buttons) {
+  // Dispatch a synthetic mouse event to the noVNC canvas.
+  //
+  // These must be MouseEvents, not PointerEvents. noVNC 1.5 binds
+  // mousedown/mouseup/mousemove directly to the canvas, so dispatching
+  // pointermove and friends reaches nothing: the virtual cursor moved but the
+  // server cursor never did, which is exactly the trackpad bug.
+  function sendMouse(type, button, buttons) {
     const canvas = getCanvas();
     if (!canvas) return;
-    patchCanvas(canvas);
-    canvas.dispatchEvent(new PointerEvent(type, {
+    canvas.dispatchEvent(new MouseEvent(type, {
       clientX: cursorX, clientY: cursorY,
       screenX: cursorX, screenY: cursorY,
-      pointerId: 9999, pointerType: 'mouse', isPrimary: true,
       button, buttons,
       bubbles: true, cancelable: true, view: window,
     }));
   }
 
-  // Move virtual cursor and send pointermove to VNC
+  // Move virtual cursor and send mousemove to VNC
   function moveCursor(x, y) {
     cursorX = Math.max(0, Math.min(window.innerWidth, x));
     cursorY = Math.max(0, Math.min(window.innerHeight, y));
     updateCursorPos();
-    sendPointer('pointermove', 0, isDragging ? 1 : 0);
+    sendMouse('mousemove', 0, isDragging ? 1 : 0);
   }
 
   // Click at current cursor position
   function clickAt(button) {
     const btns = button === 2 ? 2 : 1;
-    sendPointer('pointerdown', button, btns);
-    setTimeout(() => sendPointer('pointerup', button, 0), 60);
+    sendMouse('mousedown', button, btns);
+    setTimeout(() => sendMouse('mouseup', button, 0), 60);
   }
 
   // ── Zoom ──
@@ -1567,7 +1560,7 @@ if (isTouch) {
     // Double-tap-and-hold → start drag
     if (Date.now() - lastTapTime < 300) {
       isDragging = true;
-      sendPointer('pointerdown', 0, 1);
+      sendMouse('mousedown', 0, 1);
     }
 
     // Long-press timer → right-click
@@ -1639,7 +1632,7 @@ if (isTouch) {
     if (e.touches.length === 0) {
       // End drag if active
       if (isDragging) {
-        sendPointer('pointerup', 0, 0);
+        sendMouse('mouseup', 0, 0);
         isDragging = false;
         return;
       }
@@ -1685,15 +1678,61 @@ if (isTouch) {
   }, { passive: true });
   vncContainer.addEventListener('touchend', () => { scrollAccY = 0; }, { passive: true });
 
-  // Virtual keyboard
+  // Virtual keyboard.
+  //
+  // noVNC 1.5 has no textarea to summon: its Keyboard grabs keydown/keyup on
+  // the canvas itself, and a <canvas> cannot be focused in a way that raises the
+  // on-screen keyboard on iOS or Android. The old handler looked for a textarea
+  // inside #vnc-container, which never exists, and fell back to rfb.focus() --
+  // a no-op for the soft keyboard, which is why the button appeared dead.
+  //
+  // So: keep a real off-screen textarea focused to make the OS keyboard appear,
+  // and re-dispatch its key events onto the canvas where noVNC is listening.
+  let kbdInput = null;
+
+  function ensureKeyboardInput() {
+    if (kbdInput) return kbdInput;
+    kbdInput = document.createElement('textarea');
+    kbdInput.setAttribute('aria-label', 'Remote keyboard');
+    kbdInput.setAttribute('autocomplete', 'off');
+    kbdInput.setAttribute('autocapitalize', 'off');
+    kbdInput.setAttribute('autocorrect', 'off');
+    kbdInput.setAttribute('spellcheck', 'false');
+    // Off-screen rather than display:none -- a hidden element cannot be focused
+    // on iOS, which would silently break this again.
+    kbdInput.style.cssText = 'position:fixed;left:0;bottom:0;width:1px;height:1px;' +
+      'opacity:0;border:0;padding:0;margin:0;resize:none;z-index:-1;';
+    document.body.appendChild(kbdInput);
+
+    const forward = (e, type) => {
+      const canvas = getCanvas();
+      if (!canvas) return;
+      canvas.dispatchEvent(new KeyboardEvent(type, {
+        key: e.key, code: e.code,
+        keyCode: e.keyCode, which: e.which,
+        location: e.location, repeat: e.repeat,
+        ctrlKey: e.ctrlKey, shiftKey: e.shiftKey,
+        altKey: e.altKey, metaKey: e.metaKey,
+        bubbles: true, cancelable: true, view: window,
+      }));
+      // Swallow it here; the remote session is the only consumer.
+      e.preventDefault();
+    };
+
+    kbdInput.addEventListener('keydown', (e) => forward(e, 'keydown'));
+    kbdInput.addEventListener('keyup',   (e) => forward(e, 'keyup'));
+    return kbdInput;
+  }
+
+  ensureKeyboardInput();
+
   document.getElementById('mob-keyboard').addEventListener('click', () => {
-    const textarea = vncContainer.querySelector('textarea');
-    if (textarea) {
-      textarea.focus();
-      textarea.click();
-    } else if (rfb) {
-      rfb.focus();
-    }
+    const input = ensureKeyboardInput();
+    // Must happen inside the click handler: browsers only raise the soft
+    // keyboard for a focus() call made during a user gesture.
+    input.focus({ preventScroll: true });
+    if (input.select) input.select();
+    notify('Keyboard ready — type on your device', 'success', 2500);
   });
 
   // Auto-hide toolbar after inactivity

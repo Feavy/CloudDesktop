@@ -1135,3 +1135,12 @@ body {
 
 /* VNC container clip when zoomed */
 #vnc-container { overflow: hidden; }
+
+/* noVNC's mouse capture is a fixed, full-viewport div at z-index 10000, inserted
+   on the canvas's first mousedown to keep receiving moves outside the window. On
+   a touch device it lands on top of #vnc-container and swallows every subsequent
+   touch, so the trackpad would stop responding after the first click. We drive
+   the mouse by dispatching on the canvas directly, so the proxy is redundant;
+   letting events pass through it keeps noVNC's window-level mousemove forwarding
+   working for real mice. */
+#noVNC_mouse_capture_elem { pointer-events: none !important; }
