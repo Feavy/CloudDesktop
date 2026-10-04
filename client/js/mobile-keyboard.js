@@ -36,6 +36,11 @@ import KeyTable from '/vendor/novnc/core/input/keysym.js';
 const SETTLE_QUIET_MS = 250;
 const SETTLE_MAX_MS = 1500;
 
+// How far the viewport has to shrink before we believe the soft keyboard is
+// really covering part of the page. Used to tell the keyboard closing on its
+// own apart from the viewport merely wobbling.
+const KEYBOARD_SHRINK_PX = 40;
+
 export function createMobileKeyboard({ getRfb, button, onOpenChange }) {
   let input = null;
   let open = false;
@@ -45,6 +50,7 @@ export function createMobileKeyboard({ getRfb, button, onOpenChange }) {
   // believing the animation is over -- a pure quiet-timer would fire during the
   // slow part of the animation, where no resize event has happened yet.
   let baselineHeight = 0;
+  let sawShrink = false;
   let settle = null;
   // noVNC's resizeSession as it was before we suspended it, so we put it back
   // the way we found it. It is not always on: on a touch device the caller owns
@@ -83,7 +89,32 @@ export function createMobileKeyboard({ getRfb, button, onOpenChange }) {
     input.addEventListener('keydown', onKeyDown);
     input.addEventListener('keyup', onKeyUp);
     input.addEventListener('input', onInput);
+    input.addEventListener('blur', onInputBlur);
     return input;
+  }
+
+  // The OS dismisses the soft keyboard on its own all the time -- Android's back
+  // and return keys do it -- and none of that goes through closeKeyboard(). Left
+  // unhandled, the button keeps its active state, click-to-focus stays
+  // suspended, and refits are blocked for the rest of the session. Two signals
+  // cover it: the input losing focus, and the viewport growing back after we
+  // saw it shrink (some IMEs hide without blurring).
+  function onInputBlur() {
+    // No-op for our own closeKeyboard(), which flips `open` before it blurs.
+    if (!open) return;
+    closeKeyboard();
+  }
+
+  function onViewportResize() {
+    if (!open) return;
+    if (window.innerHeight < baselineHeight - KEYBOARD_SHRINK_PX) {
+      sawShrink = true;
+      return;
+    }
+    // Back to the height the page had before the keyboard came up: it is gone.
+    // Gated on sawShrink so that a browser which floats the keyboard over the
+    // page without resizing the viewport is not read as "closed".
+    if (sawShrink) closeKeyboard();
   }
 
   function sendKey(keysym, code, down, caps, num) {
@@ -284,6 +315,7 @@ export function createMobileKeyboard({ getRfb, button, onOpenChange }) {
     // different resizeSession setting.
     resumeResizeSession = null;
     baselineHeight = window.innerHeight;
+    sawShrink = false;
     const el = ensureInput();
     // Must happen inside the user gesture that opened it: browsers only raise
     // the soft keyboard for a focus() call made during one.
@@ -296,10 +328,12 @@ export function createMobileKeyboard({ getRfb, button, onOpenChange }) {
 
   function closeKeyboard() {
     releaseHeld();
+    // Flip our state before blurring, so the blur that onInputBlur sees is
+    // recognised as ours rather than as the OS closing the keyboard.
+    setOpen(false, false);
     input?.blur();
     // Not settled: the caller is told once the viewport has finished growing
     // back, not on blur.
-    setOpen(false, false);
     settleClose();
   }
 
@@ -317,6 +351,11 @@ export function createMobileKeyboard({ getRfb, button, onOpenChange }) {
   function refocus() {
     if (open && document.activeElement !== input) input?.focus({ preventScroll: true });
   }
+
+  // Installed for the module's lifetime rather than per-open: it is a single
+  // early return when the keyboard is not up, and it has to be listening before
+  // the OS takes the keyboard away, not after.
+  window.addEventListener('resize', onViewportResize);
 
   return {
     isOpen: () => open,
