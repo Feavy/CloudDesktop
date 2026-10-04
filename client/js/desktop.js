@@ -116,6 +116,21 @@ function setXClipboard(text) {
   }).catch(() => {});
 }
 
+// Read local clipboard and push it to the remote (VNC protocol + X server).
+// Must be called from a user gesture, or the browser denies the read.
+// Returns the text that was pushed, or '' if nothing was read.
+async function pushLocalClipboard() {
+  if (!rfb) return '';
+  try {
+    const text = await navigator.clipboard.readText();
+    if (text) {
+      rfb.clipboardPasteFrom(text);
+      await setXClipboard(text);
+    }
+    return text;
+  } catch { return ''; /* clipboard permission denied */ }
+}
+
 // Ctrl+V: intercept BEFORE noVNC, set X clipboard, wait, then replay keystroke
 vncContainer.addEventListener('keydown', async (e) => {
   if (!rfb) return;
@@ -124,24 +139,26 @@ vncContainer.addEventListener('keydown', async (e) => {
     e.stopPropagation();
     e.stopImmediatePropagation();
 
-    try {
-      const text = await navigator.clipboard.readText();
-      if (text) {
-        // Set VNC protocol clipboard + X server clipboard
-        rfb.clipboardPasteFrom(text);
-        await setXClipboard(text);
+    const text = await pushLocalClipboard();
+    if (text) {
+      // Small delay to ensure xclip has written before sending Ctrl+V
+      await new Promise(r => setTimeout(r, 80));
 
-        // Small delay to ensure xclip has written before sending Ctrl+V
-        await new Promise(r => setTimeout(r, 80));
-
-        // Replay Ctrl+V to remote desktop
-        rfb.sendKey(0xFFE3, 'ControlLeft', true);
-        rfb.sendKey(0x0076, 'KeyV', true);
-        rfb.sendKey(0x0076, 'KeyV', false);
-        rfb.sendKey(0xFFE3, 'ControlLeft', false);
-      }
-    } catch { /* clipboard permission denied */ }
+      // Replay Ctrl+V to remote desktop
+      rfb.sendKey(0xFFE3, 'ControlLeft', true);
+      rfb.sendKey(0x0076, 'KeyV', true);
+      rfb.sendKey(0x0076, 'KeyV', false);
+      rfb.sendKey(0xFFE3, 'ControlLeft', false);
+    }
   }
+}, true);
+
+// Right/middle click: sync local clipboard to the remote so right-click → Paste
+// and middle-click paste use fresh local content. mousedown is a user gesture,
+// so this also triggers the browser's clipboard permission prompt if needed.
+// The event is not swallowed — noVNC still forwards the click itself.
+vncContainer.addEventListener('mousedown', (e) => {
+  if (e.isTrusted && (e.button === 1 || e.button === 2)) pushLocalClipboard();
 }, true);
 
 // Ctrl+C: also sync from X clipboard back to browser after a short delay
