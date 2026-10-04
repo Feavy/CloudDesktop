@@ -156,9 +156,50 @@ vncContainer.addEventListener('keydown', async (e) => {
 // Right/middle click: sync local clipboard to the remote so right-click → Paste
 // and middle-click paste use fresh local content. mousedown is a user gesture,
 // so this also triggers the browser's clipboard permission prompt if needed.
-// The event is not swallowed — noVNC still forwards the click itself.
-vncContainer.addEventListener('mousedown', (e) => {
-  if (e.isTrusted && (e.button === 1 || e.button === 2)) pushLocalClipboard();
+//
+// Right click: forward the click immediately — the context menu that opens
+// gives the async push time to land before "Paste" is chosen.
+//
+// Middle click: the remote app pastes on the button press itself, so the click
+// must be held back until the push has landed, then replayed to noVNC.
+let middleClickPending = false;
+
+vncContainer.addEventListener('mousedown', async (e) => {
+  if (!e.isTrusted || (e.button !== 1 && e.button !== 2)) return;
+  if (e.button === 2 || !rfb) {
+    pushLocalClipboard();
+    return;
+  }
+
+  e.preventDefault();
+  e.stopPropagation();
+  e.stopImmediatePropagation();
+  middleClickPending = true;
+
+  await pushLocalClipboard();
+
+  const canvas = vncContainer.querySelector('canvas');
+  if (canvas) {
+    const opts = {
+      clientX: e.clientX, clientY: e.clientY,
+      screenX: e.screenX, screenY: e.screenY,
+      button: 1, buttons: 4,
+      bubbles: true, cancelable: true, view: window,
+    };
+    canvas.dispatchEvent(new MouseEvent('mousedown', opts));
+    canvas.dispatchEvent(new MouseEvent('mouseup', { ...opts, buttons: 0 }));
+  }
+  middleClickPending = false;
+}, true);
+
+// Swallow the real mouseup of a held-back middle click, so it doesn't arrive
+// after the replayed down/up pair as a stray button release.
+vncContainer.addEventListener('mouseup', (e) => {
+  if (middleClickPending && e.isTrusted && e.button === 1) {
+    e.preventDefault();
+    e.stopPropagation();
+    e.stopImmediatePropagation();
+  }
 }, true);
 
 // Ctrl+C: also sync from X clipboard back to browser after a short delay
