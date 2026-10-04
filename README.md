@@ -123,14 +123,20 @@ no `Xvnc` either. It waits for the display to accept connections, then starts th
 session, and treats the session's death as fatal so a crashed desktop restarts
 the pod rather than leaving a grey screen served over a healthy WebSocket.
 
-Opt-in extras:
+Extras:
 
 | Variable | Default | Effect |
 |---|---|---|
 | `INSTALL_NODE` | `1` | Install Node.js from NodeSource (Ubuntu's own is 18, EOL). `Dockerfile.desktop` sets this to `0` |
 | `NODE_MAJOR` | `22` | NodeSource major version |
-| `INSTALL_BROWSERS` | `0` | Google Chrome (the dock's Chrome icon) |
-| `INSTALL_FIREFOX` | `0` | Firefox from Mozilla's APT repo, not Ubuntu's snap wrapper |
+
+Installed-by-default desktop apps (set `0` to slim the image down):
+
+| Variable | Default | Effect |
+|---|---|---|
+| `INSTALL_BROWSERS` | `1` | Google Chrome (the dock's Chrome icon) |
+| `INSTALL_FIREFOX` | `1` | Firefox from Mozilla's APT repo, not Ubuntu's snap wrapper |
+| `INSTALL_VSCODE` | `1` | Visual Studio Code from Microsoft's APT repo (the dock's VS Code icon) |
 | `INSTALL_DOCS` | `0` | LibreOffice Calc and Writer |
 | `DISPLAY_GEOMETRY` | `1920x1080` | Initial framebuffer size |
 | `VNC_PORT` | `5900` | Raw RFB port (loopback only) |

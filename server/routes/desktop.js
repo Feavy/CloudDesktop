@@ -70,6 +70,7 @@ const ALLOWED_APPS = {
   terminal: { cmd: 'xfce4-terminal', args: [] },
   firefox: { cmd: 'firefox', args: ['--no-remote'] },
   chrome: { cmd: 'google-chrome', args: ['--no-sandbox', '--no-first-run'] },
+  vscode: { cmd: 'code', args: ['--no-sandbox'] },
   filemanager: { cmd: 'thunar', args: [] },
   editor: { cmd: 'mousepad', args: [] },
 };

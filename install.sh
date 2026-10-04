@@ -10,13 +10,14 @@
 #  fail2ban, no firewall, no systemd. Those belong to the pod and to the
 #  Traefik reverse proxy in front of it.
 #
-#  Optional extras are opt-in via environment variables:
+#  Optional extras are opt-in/out via environment variables:
 #    INSTALL_NODE=0       skip Node.js (only if the web client is a separate
 #                         deployment; it defaults to on)
 #    NODE_MAJOR=22        NodeSource major version to install
-#    INSTALL_BROWSERS=1   Google Chrome (the dock's "Chrome" icon)
-#    INSTALL_FIREFOX=1    Firefox
-#    INSTALL_DOCS=1       LibreOffice
+#    INSTALL_BROWSERS=0   Google Chrome (the dock's "Chrome" icon)
+#    INSTALL_FIREFOX=0    Firefox
+#    INSTALL_VSCODE=0     Visual Studio Code (the dock's "VS Code" icon)
+#    INSTALL_DOCS=0       LibreOffice
 #    DISPLAY_GEOMETRY=1920x1080
 #    VNC_PORT=5900        raw RFB port
 #    VNC_WS_PORT=6900     websockify port
@@ -35,6 +36,7 @@ VNC_DISPLAY="${VNC_DISPLAY:-:1}"
 log()  { echo -e "\033[0;32m[+]\033[0m $*"; }
 warn() { echo -e "\033[1;33m[!]\033[0m $*"; }
 die()  { echo -e "\033[0;31m[x]\033[0m $*" >&2; exit 1; }
+have_app() { command -v "$1" >/dev/null 2>&1; }
 
 # Assert a binary the image depends on actually exists, naming the package that
 # provides it so a failure says where to look instead of just what is missing.
@@ -210,17 +212,23 @@ check_bin autocutsel     autocutsel
 log "XFCE verified"
 
 # ─────────────────────────────────────────────────────────────────────────────
-# 7. Optional extras
+# 7. Desktop applications
+#
+#    Chrome, Firefox and VS Code are installed by default: they are what the
+#    dock exists for, and the dock hides an icon automatically when the binary
+#    is missing, so a build without them ships a half-empty dock. Set the
+#    matching INSTALL_* to 0 to slim the image down again.
 # ─────────────────────────────────────────────────────────────────────────────
-if [ "${INSTALL_BROWSERS:-0}" = "1" ]; then
+if [ "${INSTALL_BROWSERS:-1}" = "1" ]; then
     log "Installing Google Chrome"
     curl -fsSL -o /tmp/chrome.deb \
         https://dl.google.com/linux/direct/google-chrome-stable_current_amd64.deb
     apt-get install -y -qq /tmp/chrome.deb || apt-get install -y -qq -f
     rm -f /tmp/chrome.deb
+    check_bin google-chrome google-chrome-stable
 fi
 
-if [ "${INSTALL_FIREFOX:-0}" = "1" ]; then
+if [ "${INSTALL_FIREFOX:-1}" = "1" ]; then
     # Ubuntu's `firefox` package is a snap transitional wrapper, which does not
     # work in a container. Use the Mozilla APT repo instead.
     log "Installing Firefox (Mozilla APT repo)"
@@ -232,6 +240,27 @@ if [ "${INSTALL_FIREFOX:-0}" = "1" ]; then
 https://packages.mozilla.org/apt mozilla main" > /etc/apt/sources.list.d/mozilla.list
     apt-get update -qq
     apt-get install -y -qq firefox
+    check_bin firefox firefox
+fi
+
+if [ "${INSTALL_VSCODE:-1}" = "1" ]; then
+    # Microsoft's APT repo rather than a snap (snaps do not work in containers)
+    # or a downloaded .deb, so `apt upgrade` inside the image keeps working.
+    # The repo publishes amd64 packages only, like Chrome's .deb above.
+    if [ "$(dpkg --print-architecture)" != "amd64" ]; then
+        warn "VS Code's APT repo publishes amd64 packages only; skipping on $(dpkg --print-architecture)"
+    else
+        log "Installing Visual Studio Code (Microsoft APT repo)"
+        install -d -m 0755 /etc/apt/keyrings
+        curl -fsSL https://packages.microsoft.com/keys/microsoft.asc \
+            | gpg --dearmor --yes -o /etc/apt/keyrings/packages.microsoft.gpg
+        chmod 0644 /etc/apt/keyrings/packages.microsoft.gpg
+        echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/packages.microsoft.gpg] \
+https://packages.microsoft.com/repos/code stable main" > /etc/apt/sources.list.d/vscode.list
+        apt-get update -qq
+        apt-get install -y -qq code
+        check_bin code code
+    fi
 fi
 
 if [ "${INSTALL_DOCS:-0}" = "1" ]; then
@@ -532,6 +561,11 @@ cat <<SUMMARY
 
   Installed runtimes:
 $(if [ "${INSTALL_NODE:-1}" = "1" ]; then echo "    node       $(node --version), npm $(npm --version)"; fi)
+
+  Desktop apps:
+$(if have_app google-chrome; then echo "    chrome     $(google-chrome --version)"; fi)
+$(if have_app firefox;     then echo "    firefox    $(firefox --version)"; fi)
+$(if have_app code;        then echo "    code       $(code --version | head -1)"; fi)
 
   CMD ["start-vnc"]
 
