@@ -1,10 +1,11 @@
-const CACHE_NAME = 'clouddesktop-v2';
+const CACHE_NAME = 'clouddesktop-v3';
 const PRECACHE = [
   '/',
   '/desktop',
   '/css/desktop.css',
   '/css/notifications.css',
   '/js/desktop.js',
+  '/js/mobile-keyboard.js',
   '/js/notifications.js',
   '/manifest.json',
   '/icon-192.png',

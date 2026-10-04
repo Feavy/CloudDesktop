@@ -1,5 +1,6 @@
 import RFB from '/vendor/novnc/core/rfb.js';
 import { notify, init as initNotifications } from '/js/notifications.js';
+import { createMobileKeyboard } from '/js/mobile-keyboard.js';
 
 const statusOverlay = document.getElementById('status-overlay');
 const statusText    = document.getElementById('status-text');
@@ -17,6 +18,9 @@ const downloads = new Map();
 
 let rfb = null;
 let reconnectTimer = null;
+// Set on touch devices only; guards autoFitResolution while the soft keyboard
+// is up. See mobile-keyboard.js.
+let keyboard = null;
 
 initNotifications();
 
@@ -1325,15 +1329,20 @@ if (isIOS) {
 
 // Auto-fullscreen for regular browsers (not PWA) — hides toolbar on first click
 if (!isStandalone) {
-  function enterFullscreenOnce() {
+  function enterFullscreenOnce(e) {
+    // Never hijack a tap on the keyboard button: entering fullscreen resizes the
+    // viewport, which would fight the soft keyboard the user just asked for.
+    if (e.target && e.target.closest && e.target.closest('#mob-keyboard')) return;
     const el = document.documentElement;
     const go = el.requestFullscreen || el.webkitRequestFullscreen || el.msRequestFullscreen;
     if (go) go.call(el).catch(() => {});
     document.removeEventListener('click', enterFullscreenOnce);
     document.removeEventListener('touchstart', enterFullscreenOnce);
   }
-  document.addEventListener('click', enterFullscreenOnce, { once: true });
-  document.addEventListener('touchstart', enterFullscreenOnce, { once: true });
+  // Not { once: true }: the guard above has to be able to decline and stay
+  // registered for the next tap. The handler removes itself on success.
+  document.addEventListener('click', enterFullscreenOnce);
+  document.addEventListener('touchstart', enterFullscreenOnce);
 }
 
 // PWA standalone mode enhancements
@@ -1359,6 +1368,13 @@ if (isStandalone) {
 
 // Auto-fit VNC resolution to match current viewport
 function autoFitResolution() {
+  // While the soft keyboard is up the viewport only shows the strip above it.
+  // Fitting to that would shrink the whole remote desktop every time the
+  // keyboard opens. The keyboard module suspends noVNC's own resize for the
+  // same reason.
+  if (keyboard && keyboard.isOpen()) {
+    return Promise.resolve(null);
+  }
   const dpr = window.devicePixelRatio || 1;
   let w = window.innerWidth;
   let h = window.innerHeight;
@@ -1463,7 +1479,11 @@ if (isTouch) {
   function clickAt(button) {
     const btns = button === 2 ? 2 : 1;
     sendMouse('mousedown', button, btns);
-    setTimeout(() => sendMouse('mouseup', button, 0), 60);
+    setTimeout(() => {
+      sendMouse('mouseup', button, 0);
+      // Focusing a remote field must not cost us the soft keyboard.
+      keyboard.refocus();
+    }, 60);
   }
 
   // ── Zoom ──
@@ -1634,6 +1654,7 @@ if (isTouch) {
       if (isDragging) {
         sendMouse('mouseup', 0, 0);
         isDragging = false;
+        keyboard.refocus();
         return;
       }
 
@@ -1678,61 +1699,22 @@ if (isTouch) {
   }, { passive: true });
   vncContainer.addEventListener('touchend', () => { scrollAccY = 0; }, { passive: true });
 
-  // Virtual keyboard.
-  //
-  // noVNC 1.5 has no textarea to summon: its Keyboard grabs keydown/keyup on
-  // the canvas itself, and a <canvas> cannot be focused in a way that raises the
-  // on-screen keyboard on iOS or Android. The old handler looked for a textarea
-  // inside #vnc-container, which never exists, and fell back to rfb.focus() --
-  // a no-op for the soft keyboard, which is why the button appeared dead.
-  //
-  // So: keep a real off-screen textarea focused to make the OS keyboard appear,
-  // and re-dispatch its key events onto the canvas where noVNC is listening.
-  let kbdInput = null;
+  // Virtual keyboard. The module owns the off-screen input and the two
+  // noVNC settings that must be suspended while it is open; see
+  // mobile-keyboard.js for why.
+  keyboard = createMobileKeyboard({
+    getRfb: () => rfb,
+    button: document.getElementById('mob-keyboard'),
+    onOpenChange: (isOpen) => {
+      // The soft keyboard changes the viewport, which makes a fit-to-viewport
+      // resolution pointless while it is up. Re-fit once it is gone.
+      if (!isOpen) scheduleAutoFit();
+    },
+  });
 
-  function ensureKeyboardInput() {
-    if (kbdInput) return kbdInput;
-    kbdInput = document.createElement('textarea');
-    kbdInput.setAttribute('aria-label', 'Remote keyboard');
-    kbdInput.setAttribute('autocomplete', 'off');
-    kbdInput.setAttribute('autocapitalize', 'off');
-    kbdInput.setAttribute('autocorrect', 'off');
-    kbdInput.setAttribute('spellcheck', 'false');
-    // Off-screen rather than display:none -- a hidden element cannot be focused
-    // on iOS, which would silently break this again.
-    kbdInput.style.cssText = 'position:fixed;left:0;bottom:0;width:1px;height:1px;' +
-      'opacity:0;border:0;padding:0;margin:0;resize:none;z-index:-1;';
-    document.body.appendChild(kbdInput);
-
-    const forward = (e, type) => {
-      const canvas = getCanvas();
-      if (!canvas) return;
-      canvas.dispatchEvent(new KeyboardEvent(type, {
-        key: e.key, code: e.code,
-        keyCode: e.keyCode, which: e.which,
-        location: e.location, repeat: e.repeat,
-        ctrlKey: e.ctrlKey, shiftKey: e.shiftKey,
-        altKey: e.altKey, metaKey: e.metaKey,
-        bubbles: true, cancelable: true, view: window,
-      }));
-      // Swallow it here; the remote session is the only consumer.
-      e.preventDefault();
-    };
-
-    kbdInput.addEventListener('keydown', (e) => forward(e, 'keydown'));
-    kbdInput.addEventListener('keyup',   (e) => forward(e, 'keyup'));
-    return kbdInput;
-  }
-
-  ensureKeyboardInput();
-
-  document.getElementById('mob-keyboard').addEventListener('click', () => {
-    const input = ensureKeyboardInput();
-    // Must happen inside the click handler: browsers only raise the soft
-    // keyboard for a focus() call made during a user gesture.
-    input.focus({ preventScroll: true });
-    if (input.select) input.select();
-    notify('Keyboard ready — type on your device', 'success', 2500);
+  document.getElementById('mob-keyboard').addEventListener('click', (e) => {
+    e.stopPropagation();
+    keyboard.toggle();
   });
 
   // Auto-hide toolbar after inactivity
