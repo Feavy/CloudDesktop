@@ -1375,7 +1375,16 @@ if (isStandalone) {
   }
 }
 
-// Auto-fit VNC resolution to match current viewport
+// Bounds for the remote resolution. These are a sanity rail, not the shape:
+// the fit below moves the two dimensions together, because a remote desktop
+// with the wrong aspect ratio cannot fill the page. noVNC scales it to fit
+// inside the canvas and leaves the remainder as empty margin, so on a 390x844
+// phone a 640x840 desktop (what independent clamping produced) was being
+// scaled down to 390x512 with a third of the page blank.
+const MAX_RES_W = 1920, MAX_RES_H = 1200;
+const MIN_RES_H = 240;
+
+// Auto-fit VNC resolution to match the area the canvas actually occupies
 function autoFitResolution() {
   // While the soft keyboard is up the viewport only shows the strip above it,
   // and it keeps changing for a few hundred ms after the keyboard starts
@@ -1385,23 +1394,36 @@ function autoFitResolution() {
   if (keyboard && keyboard.blocksResize()) {
     return Promise.resolve(null);
   }
-  const dpr = window.devicePixelRatio || 1;
-  let w = window.innerWidth;
-  let h = window.innerHeight;
+
+  // Measure the canvas, not the window: the topbar eats vertical space on
+  // desktop, and on iOS --real-vh differs from window.innerHeight. Either way
+  // the window is not the box the desktop is drawn into.
+  const box = vncContainer?.getBoundingClientRect();
+  let w = box.width || window.innerWidth;
+  let h = box.height || window.innerHeight;
+  if (!(w > 0 && h > 0)) return Promise.resolve(null);
 
   // Scale up for phone HiDPI — makes desktop more usable at small viewport
+  const dpr = window.devicePixelRatio || 1;
   if (isMobile && dpr >= 2) {
     w *= 1.5;
     h *= 1.5;
   }
 
+  // Fit inside the bounds as a pair, so the aspect ratio survives. Shrink only;
+  // growing a desktop beyond its own pixel size costs bandwidth and buys
+  // nothing, and the HiDPI boost above is the one deliberate exception.
+  let k = Math.min(1, MAX_RES_W / w, MAX_RES_H / h);
+  // A container collapsed to a sliver mid-transition should still not ask the
+  // server for a mode it will reject; grow back by the short edge if so, which
+  // keeps the ratio.
+  if (h * k < MIN_RES_H) k = MIN_RES_H / h;
+  w *= k;
+  h *= k;
+
   // Align to 8px grid (xrandr modeline requirement)
   w = Math.floor(w / 8) * 8;
   h = Math.floor(h / 8) * 8;
-
-  // Clamp to usable range
-  w = Math.max(640, Math.min(1920, w));
-  h = Math.max(480, Math.min(1200, h));
 
   return fetch('/api/desktop/resolution', {
     method: 'POST', credentials: 'same-origin',

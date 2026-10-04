@@ -106,10 +106,13 @@ router.get('/config', (_req, res) => {
 router.post('/resolution', (req, res) => {
   const { width, height } = req.body;
 
+  // The floor is the sanity rail the client fits inside, not the shape it fits
+  // to: a phone in portrait is ~390 CSS px wide, and the client asks for that
+  // aspect rather than for a wider mode the page cannot display.
   if (!width || !height ||
-      width < 640 || width > 3840 ||
-      height < 480 || height > 2160) {
-    return res.status(400).json({ error: 'Invalid resolution (640-3840 x 480-2160)' });
+      width < 320 || width > 3840 ||
+      height < 240 || height > 2160) {
+    return res.status(400).json({ error: 'Invalid resolution (320-3840 x 240-2160)' });
   }
 
   const w = Math.floor(Number(width));
