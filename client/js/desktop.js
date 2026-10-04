@@ -50,7 +50,16 @@ async function connect() {
 
     rfb = new RFB(vncContainer, wsUrl, { wsProtocols: ['binary'] });
     rfb.scaleViewport  = true;
-    rfb.resizeSession  = true;
+    // On a touch device autoFitResolution() below is the only thing that should
+    // size the remote desktop. noVNC's own resizeSession sends the raw viewport
+    // size -- unscaled by devicePixelRatio and not on the 8px grid xrandr wants
+    // -- so the two would issue competing xrandr calls for the same moment, and
+    // the last one to finish would win. On a touch device the viewport changes
+    // constantly (soft keyboard, collapsing URL bar, orientation), so that race
+    // is not theoretical: suspending the keyboard's viewport change is not
+    // enough on its own, without this the resolution still lands somewhere
+    // arbitrary after every keyboard open and close.
+    rfb.resizeSession  = !isTouch;
     rfb.clipViewport   = false;
     rfb.showDotCursor  = true;
     rfb.qualityLevel   = 5;
@@ -1368,11 +1377,12 @@ if (isStandalone) {
 
 // Auto-fit VNC resolution to match current viewport
 function autoFitResolution() {
-  // While the soft keyboard is up the viewport only shows the strip above it.
-  // Fitting to that would shrink the whole remote desktop every time the
-  // keyboard opens. The keyboard module suspends noVNC's own resize for the
-  // same reason.
-  if (keyboard && keyboard.isOpen()) {
+  // While the soft keyboard is up the viewport only shows the strip above it,
+  // and it keeps changing for a few hundred ms after the keyboard starts
+  // closing. Fitting to that would shrink the whole remote desktop every time
+  // the keyboard opens, and land on a stale size every time it closes. The
+  // keyboard module suspends noVNC's own resize for the same reason.
+  if (keyboard && keyboard.blocksResize()) {
     return Promise.resolve(null);
   }
   const dpr = window.devicePixelRatio || 1;
@@ -1706,8 +1716,9 @@ if (isTouch) {
     getRfb: () => rfb,
     button: document.getElementById('mob-keyboard'),
     onOpenChange: (isOpen) => {
-      // The soft keyboard changes the viewport, which makes a fit-to-viewport
-      // resolution pointless while it is up. Re-fit once it is gone.
+      // Fires on close only once the keyboard has finished animating away and
+      // the viewport is the size it will stay, so the refit cannot be measured
+      // against a viewport that is still moving.
       if (!isOpen) scheduleAutoFit();
     },
   });
@@ -1716,6 +1727,13 @@ if (isTouch) {
     e.stopPropagation();
     keyboard.toggle();
   });
+
+  // Refit when the viewport changes. With noVNC's resizeSession off (see
+  // connect()) this is the only resize path on a touch device. It is debounced,
+  // and autoFitResolution() stands down while the soft keyboard is moving the
+  // viewport; the keyboard's onOpenChange above schedules the refit that would
+  // otherwise be dropped.
+  window.addEventListener('resize', scheduleAutoFit);
 
   // Auto-hide toolbar after inactivity
   let toolbarTimer = null;
