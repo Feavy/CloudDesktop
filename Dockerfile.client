@@ -20,7 +20,7 @@ COPY client ./client
 # script). Changing the arg invalidates this layer and everything after it.
 COPY scripts/stamp-cache-version.sh /tmp/stamp-cache-version.sh
 ARG CACHE_VERSION=dev
-RUN CACHE_VERSION=${CACHE_VERSION} bash /tmp/stamp-cache-version.sh \
+RUN CACHE_VERSION=${CACHE_VERSION} sh /tmp/stamp-cache-version.sh \
     && rm -f /tmp/stamp-cache-version.sh
 
 ENV NODE_ENV=production \
