@@ -9,12 +9,12 @@
   <meta name="theme-color" content="#000000">
   <meta name="msapplication-TileColor" content="#000000">
   <meta name="msapplication-navbutton-color" content="#000000">
-  <link rel="manifest" href="/manifest.json">
-  <link rel="apple-touch-icon" href="/icon-192.png">
-  <link rel="icon" type="image/png" sizes="192x192" href="/icon-192.png">
+  <link rel="manifest" href="/manifest.json?cv=%CACHE_VERSION%">
+  <link rel="apple-touch-icon" href="/icon-192.png?cv=%CACHE_VERSION%">
+  <link rel="icon" type="image/png" sizes="192x192" href="/icon-192.png?cv=%CACHE_VERSION%">
   <title>CloudDesktop</title>
-  <link rel="stylesheet" href="/css/desktop.css?v=11">
-  <link rel="stylesheet" href="/css/notifications.css?v=1">
+  <link rel="stylesheet" href="/css/desktop.css?cv=%CACHE_VERSION%">
+  <link rel="stylesheet" href="/css/notifications.css?cv=%CACHE_VERSION%">
 </head>
 <body>
 
@@ -177,17 +177,17 @@
 
       <!-- Firefox -->
       <button class="dock-item dock-app" data-app="firefox" data-label="Firefox">
-        <img class="app-icon app-icon-img" src="/img/firefox.svg" alt="Firefox" draggable="false">
+        <img class="app-icon app-icon-img" src="/img/firefox.svg?cv=%CACHE_VERSION%" alt="Firefox" draggable="false">
       </button>
 
       <!-- Chrome -->
       <button class="dock-item dock-app" data-app="chrome" data-label="Chrome">
-        <img class="app-icon app-icon-img" src="/img/chrome.svg" alt="Chrome" draggable="false">
+        <img class="app-icon app-icon-img" src="/img/chrome.svg?cv=%CACHE_VERSION%" alt="Chrome" draggable="false">
       </button>
 
       <!-- VS Code -->
       <button class="dock-item dock-app" data-app="vscode" data-label="VS Code">
-        <img class="app-icon app-icon-img" src="/img/vscode.svg" alt="VS Code" draggable="false">
+        <img class="app-icon app-icon-img" src="/img/vscode.svg?cv=%CACHE_VERSION%" alt="VS Code" draggable="false">
       </button>
 
       <!-- Files -->
@@ -443,6 +443,6 @@
     </div>
   </div>
 
- <script type="module" src="/js/desktop.js?v=13"></script>
+ <script type="module" src="/js/desktop.js?cv=%CACHE_VERSION%"></script>
 </body>
 </html>

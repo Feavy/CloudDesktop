@@ -34,26 +34,30 @@ app.set('trust proxy', 1);
 // middleware, so every request reaching this process is already authorised.
 app.use('/api/desktop', desktopRoutes);
 
-// Revalidate every client asset against its ETag on every load. Without this
-// the browser (or a shared cache) may keep serving the previous deployment's
-// files, and a stale desktop.js quietly misbehaves against a fresh pod. The
-// ETag still turns unchanged loads into cheap 304s, so this costs nothing
-// beyond the revalidation round-trips.
-const noCacheHeaders = (res) => res.setHeader('Cache-Control', 'no-cache');
+// Cache policy
+// ------------
+// desktop.html itself is served `no-cache`: it is what carries the
+// ?cv=<version> query on every asset URL, so it must always revalidate
+// (its ETag keeps that at a 304). The assets behind those URLs are stamped
+// by scripts/stamp-cache-version.sh during the image build and can therefore
+// be cached forever — a deployment changes the URL, which is the bust.
+// /vendor/novnc is the exception: its modules import each other with bare
+// URLs we cannot stamp, so it revalidates instead of caching forever.
+const noCache      = (res) => res.setHeader('Cache-Control', 'no-cache');
+const immutableOne = (res) => res.setHeader('Cache-Control', 'public, max-age=31536000, immutable');
 
 // Serve noVNC
 app.use('/vendor/novnc', express.static(
   path.join(__dirname, '..', 'client', 'vendor', 'novnc'),
-  { setHeaders: noCacheHeaders }
+  { setHeaders: noCache }
 ));
 
-// Serve client static files: always revalidated, never served stale
+// Serve client static files
 app.use(express.static(path.join(__dirname, '..', 'client'), {
   index: false,
   etag: true,
   lastModified: true,
-  maxAge: 0,
-  setHeaders: noCacheHeaders,
+  setHeaders: immutableOne,
 }));
 
 // The client is a single page

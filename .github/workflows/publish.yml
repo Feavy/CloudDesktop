@@ -173,6 +173,11 @@ jobs:
           push: ${{ needs.prep.outputs.push == 'true' }}
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
+          # Cache-busting version stamped into the client's asset URLs, so a
+          # new deployment is picked up without a hard reload. Dockerfile.desktop
+          # ignores it (it ships no client files) but passing it is harmless.
+          build-args: |
+            CACHE_VERSION=${{ github.run_number }}
           # The all-in-one image installs XFCE and is multi-gigabyte; without
           # this every rebuild starts from scratch.
           cache-from: type=gha,scope=${{ matrix.image.name }}
@@ -269,6 +274,7 @@ jobs:
           labels: ${{ steps.meta.outputs.labels }}
           build-args: |
             BASE_IMAGE=${{ env.REGISTRY }}/${{ needs.prep.outputs.owner }}/clouddesktop-desktop:${{ needs.prep.outputs.base_tag }}
+            CACHE_VERSION=${{ github.run_number }}
           cache-from: type=gha,scope=clouddesktop-full
           cache-to: type=gha,mode=max,scope=clouddesktop-full
           provenance: false

@@ -15,6 +15,14 @@ RUN cd server && npm ci --omit=dev && npm cache clean --force
 COPY server ./server
 COPY client ./client
 
+# Bake the cache-busting version into the client's asset URLs. CI passes
+# GITHUB_RUN_NUMBER; local builds fall back to a client content hash (see the
+# script). Changing the arg invalidates this layer and everything after it.
+COPY scripts/stamp-cache-version.sh /tmp/stamp-cache-version.sh
+ARG CACHE_VERSION=dev
+RUN CACHE_VERSION=${CACHE_VERSION} bash /tmp/stamp-cache-version.sh \
+    && rm -f /tmp/stamp-cache-version.sh
+
 ENV NODE_ENV=production \
     HOST=0.0.0.0 \
     PORT=3000

@@ -1,6 +1,6 @@
 import RFB from '/vendor/novnc/core/rfb.js';
-import { notify, init as initNotifications } from '/js/notifications.js';
-import { createMobileKeyboard } from '/js/mobile-keyboard.js';
+import { notify, init as initNotifications } from '/js/notifications.js?cv=%CACHE_VERSION%';
+import { createMobileKeyboard } from '/js/mobile-keyboard.js?cv=%CACHE_VERSION%';
 
 const statusOverlay = document.getElementById('status-overlay');
 const statusText    = document.getElementById('status-text');
