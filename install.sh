@@ -232,10 +232,14 @@ if [ "${INSTALL_FIREFOX:-1}" = "1" ]; then
     # Ubuntu's `firefox` package is a snap transitional wrapper, which does not
     # work in a container. Use the Mozilla APT repo instead.
     log "Installing Firefox (Mozilla APT repo)"
-    apt-get install -y -qq --no-install-recommends ca-certificates gnupg
     install -d -m 0755 /etc/apt/keyrings
+    # The key is served ASCII-armored, and the file is named .asc: save it
+    # verbatim. Dearmoring it into a .asc file breaks apt, which re-converts
+    # .asc keyrings on use and ends up with garbage gpgv cannot read
+    # (NO_PUBKEY despite the key being in the file).
     curl -fsSL https://packages.mozilla.org/apt/repo-signing-key.gpg \
-        | gpg --dearmor -o /etc/apt/keyrings/packages.mozilla.org.asc
+        -o /etc/apt/keyrings/packages.mozilla.org.asc
+    chmod 0644 /etc/apt/keyrings/packages.mozilla.org.asc
     echo "deb [signed-by=/etc/apt/keyrings/packages.mozilla.org.asc] \
 https://packages.mozilla.org/apt mozilla main" > /etc/apt/sources.list.d/mozilla.list
     apt-get update -qq
