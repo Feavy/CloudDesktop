@@ -1615,19 +1615,24 @@ if (isTouch) {
     pendingClick = null;
   }
 
+  // Press the left button and hold it down for a drag; isDragging routes
+  // every cursor move out as a pressed mousemove until the finger lifts.
+  function beginDrag() {
+    cancelPendingClick();
+    secondTapDown = false;
+    isDragging = true;
+    sendMouse('mousedown', 0, 1);
+    if (navigator.vibrate) navigator.vibrate(30);
+  }
+
   // The tap buffer expired: the gesture is decided, send what it resolved to.
   function resolvePendingClick() {
     pendingClickTimer = null;
     if (secondTapDown) {
-      // A second touch is still on screen — holding (or sliding) it means
-      // drag, not click. Drop the buffered click and press the left button
-      // exactly once; it stays down until the finger lifts, and every move
-      // until then goes out pressed (moveCursor → mousemove).
-      pendingClick = null;
-      secondTapDown = false; // consumed: the next tap starts fresh
-      isDragging = true;
-      sendMouse('mousedown', 0, 1);
-      if (navigator.vibrate) navigator.vibrate(30);
+      // A second touch is still on screen — holding it means drag, not
+      // click. Drop the buffered click and press the left button exactly
+      // once; it stays down until the finger lifts.
+      beginDrag();
     } else if (pendingClick) {
       // Plain tap: land the click where the tap happened, even if the cursor
       // has moved on since.
@@ -1754,8 +1759,9 @@ if (isTouch) {
     secondTapDown = false;
 
     // A touch while a tap sits in the buffer is the double-click / drag
-    // candidate. Its fate is decided when the buffer expires (finger still
-    // down → drag) or at its own release (quick lift → double-click), so no
+    // candidate. Its fate is decided at its first real movement (slide →
+    // drag engages immediately), when the buffer expires (finger still down
+    // → drag), or at its own release (quick lift → double-click), so no
     // long-press timer here: holding this touch IS the drag gesture.
     if (pendingClickTimer) {
       secondTapDown = true;
@@ -1844,6 +1850,13 @@ if (isTouch) {
     if (!touchMoved && touchMovedDist > TAP_MAX_MOVE) {
       touchMoved = true;
       clearTimeout(longPressTimer);
+      // The drag-candidate touch is on the move: that can no longer be a
+      // double-click, so don't sit out the buffer — press the button now,
+      // while the cursor is still where the finger started moving. Waiting
+      // for expiry would start the drag wherever the cursor drifted to.
+      if (secondTapDown && pendingClickTimer) {
+        beginDrag();
+      }
     }
 
     touchStartX = t.clientX;
