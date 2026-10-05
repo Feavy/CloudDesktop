@@ -58,6 +58,7 @@ jobs:
       push: ${{ steps.vars.outputs.push }}
       reason: ${{ steps.vars.outputs.reason }}
       base_tag: ${{ steps.vars.outputs.base_tag }}
+      build_time: ${{ steps.vars.outputs.build_time }}
     steps:
       - id: vars
         env:
@@ -65,6 +66,7 @@ jobs:
           HEAD_REPO: ${{ github.event.pull_request.head.repo.full_name }}
           BASE_REPO: ${{ github.repository }}
           DISPATCH_PUSH: ${{ inputs.push }}
+          COMMIT_TIME: ${{ github.event.head_commit.timestamp }}
         run: |
           # GHCR requires a lowercase owner; GitHub exposes the original casing.
           owner=$(echo "${{ github.repository_owner }}" | tr '[:upper:]' '[:lower:]')
@@ -92,6 +94,18 @@ jobs:
           echo "push=$push"     >> "$GITHUB_OUTPUT"
           echo "reason=$reason" >> "$GITHUB_OUTPUT"
 
+          # Build timestamp baked into the client's settings caption. Only push
+          # and tag events carry head_commit; for the rest (pull requests,
+          # manual dispatch) fall back to the moment this run started. It is
+          # resolved once here so every image in the run is stamped alike, and
+          # the commit time keeps rebuilds of the same commit reproducible —
+          # same sources, same stamped time, docker layer cache stays valid.
+          build_time="$COMMIT_TIME"
+          if [ -z "$build_time" ]; then
+            build_time=$(date -u '+%Y-%m-%dT%H:%M:%SZ')
+          fi
+          echo "build_time=$build_time" >> "$GITHUB_OUTPUT"
+
           # clouddesktop-full is built FROM clouddesktop-desktop so it does not
           # re-install XFCE. It must use the desktop image this run produced,
           # not a previously published tag, otherwise a PR that edits
@@ -106,6 +120,7 @@ jobs:
             echo "| owner | $owner |"
             echo "| push | $push |"
             echo "| reason | $reason |"
+            echo "| build time | $build_time |"
           } >> "$GITHUB_STEP_SUMMARY"
 
   build:
@@ -173,11 +188,13 @@ jobs:
           push: ${{ needs.prep.outputs.push == 'true' }}
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
-          # Cache-busting version stamped into the client's asset URLs, so a
-          # new deployment is picked up without a hard reload. Dockerfile.desktop
-          # ignores it (it ships no client files) but passing it is harmless.
+          # Cache-busting version and build timestamp stamped into the client
+          # (asset URLs and the settings caption), so a new deployment is
+          # picked up without a hard reload. Dockerfile.desktop ignores both
+          # (it ships no client files) but passing them is harmless.
           build-args: |
             CACHE_VERSION=${{ github.run_number }}
+            BUILD_DATETIME=${{ needs.prep.outputs.build_time }}
           # The all-in-one image installs XFCE and is multi-gigabyte; without
           # this every rebuild starts from scratch.
           cache-from: type=gha,scope=${{ matrix.image.name }}
@@ -275,6 +292,7 @@ jobs:
           build-args: |
             BASE_IMAGE=${{ env.REGISTRY }}/${{ needs.prep.outputs.owner }}/clouddesktop-desktop:${{ needs.prep.outputs.base_tag }}
             CACHE_VERSION=${{ github.run_number }}
+            BUILD_DATETIME=${{ needs.prep.outputs.build_time }}
           cache-from: type=gha,scope=clouddesktop-full
           cache-to: type=gha,mode=max,scope=clouddesktop-full
           provenance: false

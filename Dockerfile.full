@@ -37,12 +37,14 @@ COPY client ./client
 COPY deploy/entrypoint.sh /usr/local/bin/entrypoint
 RUN chmod +x /usr/local/bin/entrypoint
 
-# Bake the cache-busting version into the client's asset URLs. CI passes
-# GITHUB_RUN_NUMBER; local builds fall back to a client content hash (see the
-# script). Changing the arg invalidates this layer and everything after it.
+# Bake the cache-busting version and the build timestamp into the client.
+# CI passes GITHUB_RUN_NUMBER and the commit time; local builds fall back to
+# a client content hash and the stamping moment (see the script). Changing
+# either arg invalidates this layer and everything after it.
 COPY scripts/stamp-cache-version.sh /tmp/stamp-cache-version.sh
 ARG CACHE_VERSION=dev
-RUN CACHE_VERSION=${CACHE_VERSION} sh /tmp/stamp-cache-version.sh /app/client \
+ARG BUILD_DATETIME
+RUN CACHE_VERSION=${CACHE_VERSION} BUILD_DATETIME=${BUILD_DATETIME} sh /tmp/stamp-cache-version.sh /app/client \
     && rm -f /tmp/stamp-cache-version.sh
 
 ENV NODE_ENV=production \
