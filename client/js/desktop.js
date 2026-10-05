@@ -1528,6 +1528,7 @@ if (isTouch) {
   let touchStartX = 0, touchStartY = 0;
   let touchStartTime = 0;
   let touchMoved = false;
+  let touchMovedDist = 0;
   let longPressTimer = null;
   let longPressFired = false;
   let isDragging = false;   // double-tap-hold drag
@@ -1708,6 +1709,7 @@ if (isTouch) {
     touchStartY = t.clientY;
     touchStartTime = Date.now();
     touchMoved = false;
+    touchMovedDist = 0;
     longPressFired = false;
     twoFingerSeen = false;
 
@@ -1791,12 +1793,14 @@ if (isTouch) {
     const dx = (t.clientX - touchStartX) * CURSOR_SPEED;
     const dy = (t.clientY - touchStartY) * CURSOR_SPEED;
 
-    if (Math.abs(t.clientX - touchStartX) > TAP_MAX_MOVE ||
-        Math.abs(t.clientY - touchStartY) > TAP_MAX_MOVE) {
-      if (!touchMoved) {
-        touchMoved = true;
-        clearTimeout(longPressTimer);
-      }
+    // Counted cumulatively across the whole touch sequence: touchStartX/Y
+    // re-anchor every event, so a slow drag never exceeds TAP_MAX_MOVE in any
+    // single event and must be caught by the accumulated distance, or the
+    // long-press timer fires a right-click mid-drag.
+    touchMovedDist += Math.hypot(t.clientX - touchStartX, t.clientY - touchStartY);
+    if (!touchMoved && touchMovedDist > TAP_MAX_MOVE) {
+      touchMoved = true;
+      clearTimeout(longPressTimer);
     }
 
     touchStartX = t.clientX;
