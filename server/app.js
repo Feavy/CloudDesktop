@@ -36,13 +36,16 @@ app.use('/api/desktop', desktopRoutes);
 
 // Cache policy
 // ------------
-// desktop.html itself is served `no-cache`: it is what carries the
-// ?cv=<version> query on every asset URL, so it must always revalidate
-// (its ETag keeps that at a 304). The assets behind those URLs are stamped
-// by scripts/stamp-cache-version.sh during the image build and can therefore
+// desktop.html itself must never be stored: it is what carries the
+// ?cv=<version> query on every asset URL, so every load has to get the
+// current bytes. `no-cache` would still let the browser hold a copy and
+// revalidate it (a 304 keeps serving the stored HTML), so it gets `no-store`
+// — always a full 200. The assets behind those URLs are stamped by
+// scripts/stamp-cache-version.sh during the image build and can therefore
 // be cached forever — a deployment changes the URL, which is the bust.
 // /vendor/novnc is the exception: its modules import each other with bare
 // URLs we cannot stamp, so it revalidates instead of caching forever.
+const noStore      = (res) => res.setHeader('Cache-Control', 'no-store');
 const noCache      = (res) => res.setHeader('Cache-Control', 'no-cache');
 const immutableOne = (res) => res.setHeader('Cache-Control', 'public, max-age=31536000, immutable');
 
@@ -68,9 +71,17 @@ app.use(express.static(path.join(__dirname, '..', 'client'), {
   setHeaders: immutableOne,
 }));
 
+// desktop.html reached by its own name must not fall through to the static
+// handler above: it would be stamped immutable for a year, exactly the one
+// file that may never be cached.
+app.get('/desktop.html', (_req, res) => {
+  res.set('Cache-Control', 'no-store');
+  res.sendFile(path.join(__dirname, '..', 'client', 'desktop.html'));
+});
+
 // The client is a single page
 app.get(['/', '/desktop'], (_req, res) => {
-  res.set('Cache-Control', 'no-cache');
+  res.set('Cache-Control', 'no-store');
   res.sendFile(path.join(__dirname, '..', 'client', 'desktop.html'));
 });
 

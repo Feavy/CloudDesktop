@@ -19,7 +19,7 @@ const downloads = new Map();
 let rfb = null;
 let reconnectTimer = null;
 // Set on touch devices only; guards autoFitResolution while the soft keyboard
-// is up. See mobile-keyboard.js.
+// is animating in or out. See mobile-keyboard.js.
 let keyboard = null;
 
 initNotifications();
@@ -1481,11 +1481,12 @@ const MIN_RES_H = 240;
 
 // Auto-fit VNC resolution to match the area the canvas actually occupies
 function autoFitResolution() {
-  // While the soft keyboard is up the viewport only shows the strip above it,
-  // and it keeps changing for a few hundred ms after the keyboard starts
-  // closing. Fitting to that would shrink the whole remote desktop every time
-  // the keyboard opens, and land on a stale size every time it closes. The
-  // keyboard module suspends noVNC's own resize for the same reason.
+  // Stand down only while the keyboard is animating in or out: fitting to a
+  // viewport that is still moving would land on a size that exists for a few
+  // hundred ms. Once it has settled -- up or down -- fitting is exactly what
+  // we want: the desktop tracks the strip above the keyboard while typing,
+  // and the full viewport again once it is gone. The keyboard module
+  // suspends noVNC's own resize for the same reason.
   if (keyboard && keyboard.blocksResize()) {
     return Promise.resolve(null);
   }
@@ -1968,10 +1969,12 @@ if (isTouch) {
   keyboard = createMobileKeyboard({
     getRfb: () => rfb,
     onOpenChange: (isOpen) => {
-      // Fires on close only once the keyboard has finished animating away and
-      // the viewport is the size it will stay, so the refit cannot be measured
-      // against a viewport that is still moving.
-      if (!isOpen) scheduleAutoFit();
+      // Fires once the keyboard has finished animating, in both directions:
+      // refit to the strip left above it while it is up, and back to the full
+      // viewport once it is gone. (On close this only happens after the
+      // viewport has finished growing back, so the refit cannot be measured
+      // against a size that is still moving.)
+      scheduleAutoFit();
     },
   });
 

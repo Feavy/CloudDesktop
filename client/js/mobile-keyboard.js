@@ -93,6 +93,11 @@ export function createMobileKeyboard({ getRfb, onOpenChange }) {
   // The special-keys bar element and whether its viewport listeners are on.
   let bar = null;
   let barPinned = false;
+  // Watcher for the keyboard's open animation: the viewport shrinks in steps
+  // as the soft keyboard slides up, and only when it has stopped moving do we
+  // announce the keyboard as (settled) open -- the caller refits the remote
+  // desktop to the strip that is left, which would be wasted mid-animation.
+  let openWatch = null;
 
   function ensureInput() {
     if (input) return input;
@@ -379,8 +384,8 @@ export function createMobileKeyboard({ getRfb, onOpenChange }) {
   }
 
   // `settled` is false while the keyboard is still animating away: the caller
-  // is not told yet, because a refit now would measure a viewport that is about
-  // to change again. See settleClose.
+  // is not told yet, because a refit now would measure a viewport that is
+  // about to change again. See settleClose.
   function setOpen(next, settled = true) {
     if (open === next) return;
     open = next;
@@ -460,6 +465,47 @@ export function createMobileKeyboard({ getRfb, onOpenChange }) {
     resumeResizeSession = null;
   }
 
+  // Mirror of settleClose for the open direction: the viewport shrinks in
+  // steps while the soft keyboard slides up, and only once it has stopped
+  // moving is the keyboard announced as open -- that is the caller's cue to
+  // refit the remote desktop to the strip that is left above it.
+  function watchOpenSettle() {
+    cancelOpenWatch();
+    const state = { timer: null, cap: null, onResize: null };
+    openWatch = state;
+
+    const finish = () => {
+      if (openWatch !== state) return;
+      openWatch = null;
+      window.removeEventListener('resize', state.onResize);
+      clearTimeout(state.timer);
+      clearTimeout(state.cap);
+      // closeKeyboard may have won the race (a fast tap on the toggle); it
+      // announces the close itself, so stay quiet here.
+      if (open) onOpenChange?.(true);
+    };
+
+    // Any resize during the animation restarts the quiet window, exactly like
+    // settleClose. The cap keeps a viewport that never settles from stranding
+    // the caller without the refit.
+    state.onResize = () => {
+      clearTimeout(state.timer);
+      state.timer = setTimeout(finish, SETTLE_QUIET_MS);
+    };
+    state.timer = setTimeout(finish, SETTLE_QUIET_MS);
+    state.cap = setTimeout(finish, SETTLE_MAX_MS);
+    window.addEventListener('resize', state.onResize);
+  }
+
+  function cancelOpenWatch() {
+    if (!openWatch) return;
+    const state = openWatch;
+    openWatch = null;
+    window.removeEventListener('resize', state.onResize);
+    clearTimeout(state.timer);
+    clearTimeout(state.cap);
+  }
+
   function openKeyboard() {
     cancelSettle();
     // A reconnect mid-press replaces the RFB object; anything remembered from
@@ -480,11 +526,18 @@ export function createMobileKeyboard({ getRfb, onOpenChange }) {
     // iOS scrolls the page to the focused element; the input is at 0,0 already
     // but an earlier scroll may not have been undone.
     window.scrollTo(0, 0);
-    setOpen(true);
+    // Not settled: the caller is told once the keyboard has finished sliding
+    // in (watchOpenSettle), so its refit measures the strip that actually
+    // remains, not whatever the animation happens to show right now.
+    setOpen(true, false);
     showBar();
+    watchOpenSettle();
   }
 
   function closeKeyboard() {
+    // The keyboard is on its way out: a pending open announcement would fire
+    // mid-close-animation and make the caller refit to a vanishing strip.
+    cancelOpenWatch();
     releaseHeld();
     // Latched sticky keys go up with the keyboard: leaving Ctrl held on the
     // remote after it closes would poison every later click and keystroke.
@@ -521,9 +574,11 @@ export function createMobileKeyboard({ getRfb, onOpenChange }) {
 
   return {
     isOpen: () => open,
-    // True while the keyboard is up *and* while it is animating away: both are
-    // times when the viewport is not the one a fit-to-viewport should measure.
-    blocksResize: () => open || !!settle,
+    // True while the keyboard is animating in or out: both are times when the
+    // viewport is not the one a fit-to-viewport should measure. Once it has
+    // settled -- up (strip above the keyboard) or down (full viewport) --
+    // fitting is the caller's job and this says go ahead.
+    blocksResize: () => !!openWatch || !!settle,
     open: openKeyboard,
     close: closeKeyboard,
     toggle: () => (open ? closeKeyboard() : openKeyboard()),
