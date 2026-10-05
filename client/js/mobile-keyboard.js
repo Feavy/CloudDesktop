@@ -41,7 +41,7 @@ const SETTLE_MAX_MS = 1500;
 // own apart from the viewport merely wobbling.
 const KEYBOARD_SHRINK_PX = 40;
 
-export function createMobileKeyboard({ getRfb, button, onOpenChange }) {
+export function createMobileKeyboard({ getRfb, onOpenChange }) {
   let input = null;
   let open = false;
 
@@ -95,9 +95,9 @@ export function createMobileKeyboard({ getRfb, button, onOpenChange }) {
 
   // The OS dismisses the soft keyboard on its own all the time -- Android's back
   // and return keys do it -- and none of that goes through closeKeyboard(). Left
-  // unhandled, the button keeps its active state, click-to-focus stays
-  // suspended, and refits are blocked for the rest of the session. Two signals
-  // cover it: the input losing focus, and the viewport growing back after we
+  // unhandled, click-to-focus stays suspended and refits are blocked for the
+  // rest of the session. Two signals cover it: the input losing focus, and the
+  // viewport growing back after we
   // saw it shrink (some IMEs hide without blurring).
   function onInputBlur() {
     // No-op for our own closeKeyboard(), which flips `open` before it blurs.
@@ -241,7 +241,6 @@ export function createMobileKeyboard({ getRfb, button, onOpenChange }) {
         rfb.resizeSession = false;
       }
     }
-    if (button) button.classList.toggle('active', next);
     if (settled) onOpenChange?.(next);
   }
 

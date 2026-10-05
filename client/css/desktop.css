@@ -1099,21 +1099,8 @@ body {
 }
 .mob-btn:active { background: rgba(255, 255, 255, 0.18); transform: scale(0.92); }
 .mob-btn svg { width: 20px; height: 20px; }
-.mob-btn.active {
-  background: var(--accent); color: #fff;
-  box-shadow: 0 0 8px rgba(10, 132, 255, 0.4);
-}
-
-.mob-zoom-label {
-  font-size: 10px;
-  color: rgba(255, 255, 255, 0.55);
-  font-weight: 600;
-  font-variant-numeric: tabular-nums;
-  padding: 2px 0;
-  min-width: 32px;
-  text-align: center;
-  line-height: 1;
-}
+/* SVG has no UA style for [hidden] */
+.mob-btn svg[hidden] { display: none; }
 
 .mob-sep {
   width: 26px; height: 1px;

@@ -365,10 +365,16 @@ function applyTopbar() {
 }
 applyTopbar();
 
-document.getElementById('topbar-fullscreen').addEventListener('click', () => {
+function isFullscreen() {
+  return !!(document.fullscreenElement || document.webkitFullscreenElement || mobileFullscreen);
+}
+
+function toggleFullscreen() {
   const el = document.documentElement;
   if (document.fullscreenElement) {
     document.exitFullscreen().catch(() => {});
+  } else if (document.webkitFullscreenElement && document.webkitExitFullscreen) {
+    document.webkitExitFullscreen();
   } else if (el.requestFullscreen) {
     el.requestFullscreen().catch(() => { toggleMobileFullscreen(); });
   } else if (el.webkitRequestFullscreen) {
@@ -377,12 +383,25 @@ document.getElementById('topbar-fullscreen').addEventListener('click', () => {
     // iOS Safari / browsers without Fullscreen API
     toggleMobileFullscreen();
   }
-});
+}
+
+document.getElementById('topbar-fullscreen').addEventListener('click', toggleFullscreen);
+
+// Expand/compress icon on the mobile toolbar button reflects the effective
+// state, whichever fullscreen flavor is in play.
+function updateFullscreenBtn() {
+  const fs = isFullscreen();
+  const btn = document.getElementById('mob-fullscreen');
+  if (!btn) return;
+  btn.querySelector('.fs-icon-expand').hidden = fs;
+  btn.querySelector('.fs-icon-compress').hidden = !fs;
+}
 
 let mobileFullscreen = false;
 function toggleMobileFullscreen() {
   mobileFullscreen = !mobileFullscreen;
   document.body.classList.toggle('mobile-fullscreen', mobileFullscreen);
+  updateFullscreenBtn();
   if (mobileFullscreen) {
     topbar.classList.add('hidden');
     window.scrollTo(0, 1); // nudge iOS to hide address bar
@@ -392,9 +411,11 @@ function toggleMobileFullscreen() {
 }
 
 document.addEventListener('fullscreenchange', () => {
+  updateFullscreenBtn();
   if (!document.fullscreenElement) applyTopbar();
 });
 document.addEventListener('webkitfullscreenchange', () => {
+  updateFullscreenBtn();
   if (!document.webkitFullscreenElement) applyTopbar();
 });
 
@@ -1409,9 +1430,10 @@ if (isIOS) {
 // Auto-fullscreen for regular browsers (not PWA) — hides toolbar on first click
 if (!isStandalone) {
   function enterFullscreenOnce(e) {
-    // Never hijack a tap on the keyboard button: entering fullscreen resizes the
-    // viewport, which would fight the soft keyboard the user just asked for.
-    if (e.target && e.target.closest && e.target.closest('#mob-keyboard')) return;
+    // Never hijack a tap on the keyboard or fullscreen buttons: entering
+    // fullscreen resizes the viewport, which would fight the soft keyboard the
+    // user just asked for, and the fullscreen button manages its own state.
+    if (e.target && e.target.closest && (e.target.closest('#mob-keyboard') || e.target.closest('#mob-fullscreen'))) return;
     const el = document.documentElement;
     const go = el.requestFullscreen || el.webkitRequestFullscreen || el.msRequestFullscreen;
     if (go) go.call(el).catch(() => {});
@@ -1515,12 +1537,9 @@ window.addEventListener('orientationchange', () => setTimeout(scheduleAutoFit, 3
 if (isTouch) {
   const mobileToolbar = document.getElementById('mobile-toolbar');
   const touchCursor   = document.getElementById('touch-cursor');
-  const mobZoomLabel  = document.getElementById('mob-zoom-level');
-  const mobRightBtn   = document.getElementById('mob-rightclick');
 
   let vncZoom = 1;
   let panX = 0.5, panY = 0.5;
-  let rightClickMode = false;
 
   // ── Virtual cursor state (trackpad mode) ──
   let cursorX = window.innerWidth / 2;
@@ -1601,27 +1620,12 @@ if (isTouch) {
       screen.style.transformOrigin = '';
       panX = 0.5; panY = 0.5;
     }
-    mobZoomLabel.textContent = Math.round(vncZoom * 100) + '%';
   }
 
-  document.getElementById('mob-zoom-in').addEventListener('click', () => {
-    vncZoom = Math.min(3, +(vncZoom + 0.5).toFixed(1));
-    applyVncZoom();
-  });
-  document.getElementById('mob-zoom-out').addEventListener('click', () => {
-    vncZoom = Math.max(1, +(vncZoom - 0.5).toFixed(1));
-    applyVncZoom();
-  });
   document.getElementById('mob-zoom-fit').addEventListener('click', () => {
     vncZoom = 1;
     applyVncZoom();
     autoFitResolution();
-  });
-
-  // Right-click mode: next tap sends right-click
-  mobRightBtn.addEventListener('click', () => {
-    rightClickMode = !rightClickMode;
-    mobRightBtn.classList.toggle('active', rightClickMode);
   });
 
   // ── Two-finger gestures: pinch-zoom, pan, remote scroll ──
@@ -1843,13 +1847,7 @@ if (isTouch) {
       // Tap → click. A sequence that ever became a two-finger gesture (e.g. a
       // quick two-finger flick scroll) is not a tap, however brief it was.
       if (!touchMoved && !longPressFired && !twoFingerSeen && elapsed < TAP_MAX_DURATION) {
-        if (rightClickMode) {
-          clickAt(2);
-          rightClickMode = false;
-          mobRightBtn.classList.remove('active');
-        } else {
-          clickAt(0);
-        }
+        clickAt(0);
         lastTapTime = Date.now();
       }
     }
@@ -1860,7 +1858,6 @@ if (isTouch) {
   // mobile-keyboard.js for why.
   keyboard = createMobileKeyboard({
     getRfb: () => rfb,
-    button: document.getElementById('mob-keyboard'),
     onOpenChange: (isOpen) => {
       // Fires on close only once the keyboard has finished animating away and
       // the viewport is the size it will stay, so the refit cannot be measured
@@ -1872,6 +1869,11 @@ if (isTouch) {
   document.getElementById('mob-keyboard').addEventListener('click', (e) => {
     e.stopPropagation();
     keyboard.toggle();
+  });
+
+  document.getElementById('mob-fullscreen').addEventListener('click', (e) => {
+    e.stopPropagation();
+    toggleFullscreen();
   });
 
   // Refit when the viewport changes. With noVNC's resizeSession off (see
