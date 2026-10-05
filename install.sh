@@ -188,6 +188,7 @@ apt-get install -y -qq \
     mousepad \
     xfce4-notifyd \
     xfce4-screenshooter \
+    xcape \
     adwaita-icon-theme \
     dbus-user-session
 
@@ -209,6 +210,7 @@ check_bin xfce4-terminal xfce4-terminal
 check_bin thunar         thunar
 check_bin mousepad       mousepad
 check_bin autocutsel     autocutsel
+check_bin xcape          xcape
 log "XFCE verified"
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -389,16 +391,18 @@ export XDG_CURRENT_DESKTOP=XFCE
 vncconfig -nowin >/dev/null 2>&1 &
 autocutsel -fork -selection CLIPBOARD >/dev/null 2>&1 &
 
-# XFCE binds nothing to a bare Super (Windows) key, so the key events the VNC
-# client forwards -- from a physical keyboard or from the on-screen sticky Win
-# key -- arrive at X and are simply ignored. Bind Super_L to the Applications
-# menu that is already on the stock panel: the closest thing XFCE has to a
-# Start button. xfconfd is D-Bus activated on demand, and failure here is not
-# fatal; it just leaves Super unbound as before. Set before xfce4-session so
-# its shortcut manager picks the binding up at startup.
-xfconf-query -c xfce4-keyboard-shortcuts \
-    -p /commands/custom/Super_L \
-    -n -t string -s xfce4-popup-applicationsmenu >/dev/null 2>&1 || true
+# A bare Super (Windows) key press must open the Applications menu, but
+# XFCE's shortcut engine cannot grab a bare modifier: the key events arrive
+# at X (from a physical keyboard or the on-screen sticky Win key alike) and
+# are ignored no matter what is bound in xfconf -- verified live, a
+# successfully-set /commands/custom/Super_L binding does nothing. xcape is
+# the standard bridge: a Super press+release with no other key in between
+# becomes Alt+F1, which the stock session already binds to
+# xfce4-popup-applicationsmenu. Held-Super combos are unaffected; xcape
+# steps aside whenever a second key is pressed first. stderr is kept in a
+# file rather than discarded because this exact step failed silently once
+# already; /tmp is per-pod, so the log never grows across restarts.
+xcape -e 'Super_L=Alt_L|F1;Super_R=Alt_L|F1' >/tmp/xcape.log 2>&1 &
 
 # Become the desktop.
 #
