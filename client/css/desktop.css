@@ -561,6 +561,16 @@ body.mobile-fullscreen #vnc-container { inset: 0 !important; }
 }
 .toggle-btn:hover { border-color: var(--accent); background: var(--accent-hover) !important; }
 
+/* Build caption at the bottom of the settings modal */
+.settings-version {
+  margin: 14px 0 0;
+  text-align: center;
+  font-size: 12px;
+  color: var(--text-muted);
+  user-select: text;
+}
+.settings-version[hidden] { display: none; }
+
 /* Settings section header */
 .setting-section-header {
   font-size: 11px; font-weight: 600; color: var(--text-muted);

@@ -557,6 +557,24 @@ topbarBtn.addEventListener('click', () => {
   applyTopbar();
 });
 
+// Build caption. Both placeholders are stamped into the deployed sources by
+// scripts/stamp-cache-version.sh (BUILD_DATETIME is UTC ISO, rendered below
+// in the viewer's own timezone). An unstamped dev tree keeps the literals:
+// the datetime fails to parse and the caption stays hidden.
+const APP_VERSION = '%CACHE_VERSION%';
+const APP_BUILD_DATETIME = '%BUILD_DATETIME%';
+
+const versionCaption = document.getElementById('settings-version');
+if (versionCaption) {
+  const builtAt = new Date(APP_BUILD_DATETIME);
+  const isStamped = !APP_VERSION.includes('%') && !Number.isNaN(builtAt.getTime());
+  if (isStamped) {
+    versionCaption.textContent = `Version ${APP_VERSION} · built `
+      + builtAt.toLocaleString(undefined, { dateStyle: 'medium', timeStyle: 'short' });
+    versionCaption.hidden = false;
+  }
+}
+
 // ── Resolution modal ────────────────────────────────────────
 
 const resolutionModal = document.getElementById('resolution-modal');
