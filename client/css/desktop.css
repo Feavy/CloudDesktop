@@ -1122,6 +1122,64 @@ svg.fs-icon-expand[hidden], svg.fs-icon-compress[hidden] { display: none; }
 }
 
 /* ═══════════════════════════════════════════════════════════
+   Special-keys bar (floats on top of the soft keyboard)
+   ═══════════════════════════════════════════════════════════ */
+.kb-special-bar {
+  position: fixed;
+  left: 0;
+  right: 0;
+  /* Pinned from JS to the bottom edge of the visual viewport -- the soft
+     keyboard's top edge on both Android (which shrinks the layout viewport)
+     and iOS (which overlays it). This value keeps it off-screen until then. */
+  top: 100vh;
+  transform: translateY(-100%);
+  z-index: 860;
+  display: flex;
+  gap: 6px;
+  padding: 8px 10px calc(8px + env(safe-area-inset-bottom, 0px));
+  overflow-x: auto;
+  overscroll-behavior: contain;
+  /* Horizontal scroll only: a tap on a key must never be read as a scroll. */
+  touch-action: pan-x;
+  background: rgba(30, 30, 35, 0.85);
+  border-top: 0.5px solid rgba(255, 255, 255, 0.15);
+  backdrop-filter: blur(30px) saturate(180%);
+  -webkit-backdrop-filter: blur(30px) saturate(180%);
+  scrollbar-width: none;
+  -webkit-user-select: none;
+  user-select: none;
+  -webkit-touch-callout: none;
+}
+.kb-special-bar::-webkit-scrollbar { display: none; }
+.kb-special-bar[hidden] { display: none; }
+
+.kb-special-key {
+  flex: 0 0 auto;
+  min-width: 54px;
+  height: 40px;
+  padding: 0 14px;
+  display: flex; align-items: center; justify-content: center;
+  background: rgba(255, 255, 255, 0.08);
+  border: 0.5px solid rgba(255, 255, 255, 0.15);
+  border-radius: 10px;
+  color: rgba(255, 255, 255, 0.85);
+  font-family: inherit;
+  font-size: 13px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+  transition: background 0.12s;
+}
+.kb-special-key.pressed { background: rgba(255, 255, 255, 0.2); }
+/* Sticky keys while latched (down on the remote desktop) */
+.kb-special-key.latched {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #fff;
+}
+
+/* ═══════════════════════════════════════════════════════════
    Touch Cursor Overlay (trackpad mode arrow)
    ═══════════════════════════════════════════════════════════ */
 .touch-cursor {

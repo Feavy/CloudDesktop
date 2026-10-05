@@ -24,6 +24,14 @@
 // call land on the same xrandr mode, the two race, and the desktop ends up at
 // whichever size won. Hence SETTLE_*: resizeSession stays off until the viewport
 // has actually stopped moving, and only then do we tell the caller to refit.
+//
+// On top of the soft keyboard floats a bar of keys it cannot send. Tab, Esc
+// and Delete are instant taps. Win, Ctrl, Alt, AltGr and Shift are sticky:
+// a tap sends the key down and it stays down until the next other key goes
+// through -- latch Ctrl, latch Alt, tap Del is Ctrl+Alt+Del; latch Win, type
+// G is Win+G -- or until it is tapped again. A sticky key tapped twice with
+// nothing in between is the solo press+release, which is how Win alone opens
+// the remote's Start menu.
 
 import * as KeyboardUtil from '/vendor/novnc/core/input/util.js';
 import KeyTable from '/vendor/novnc/core/input/keysym.js';
@@ -40,6 +48,21 @@ const SETTLE_MAX_MS = 1500;
 // really covering part of the page. Used to tell the keyboard closing on its
 // own apart from the viewport merely wobbling.
 const KEYBOARD_SHRINK_PX = 40;
+
+// Keys the soft keyboard cannot send, shown in a scrollable strip over it
+// while it is open. Keysyms/codes follow noVNC's own tables (Win is Super_L,
+// AltGr is ISO_Level3_Shift). Sticky keys latch on tap; see the note at the
+// top of this file for the lifecycle.
+const SPECIAL_KEYS = [
+  { label: 'Esc',   keysym: 0xFF1B, code: 'Escape' },
+  { label: 'Tab',   keysym: 0xFF09, code: 'Tab' },
+  { label: 'Del',   keysym: 0xFFFF, code: 'Delete' },
+  { label: 'Win',   keysym: 0xFFEB, code: 'MetaLeft',    sticky: true },
+  { label: 'Ctrl',  keysym: 0xFFE3, code: 'ControlLeft', sticky: true },
+  { label: 'Alt',   keysym: 0xFFE9, code: 'AltLeft',     sticky: true },
+  { label: 'AltGr', keysym: 0xFE03, code: 'AltRight',    sticky: true },
+  { label: 'Shift', keysym: 0xFFE1, code: 'ShiftLeft',   sticky: true },
+];
 
 export function createMobileKeyboard({ getRfb, onOpenChange }) {
   let input = null;
@@ -63,6 +86,13 @@ export function createMobileKeyboard({ getRfb, onOpenChange }) {
   // Keys we have pressed but not yet released, so a keyboard that vanishes
   // mid-press cannot leave a modifier stuck down on the remote desktop.
   const held = new Map();
+  // Sticky bar keys currently latched (down on the remote). Mirrors `held` in
+  // spirit but with its own lifecycle: latching outlives individual keystrokes
+  // and is spent by the next non-sticky key, not by a keyup.
+  const latched = new Map();
+  // The special-keys bar element and whether its viewport listeners are on.
+  let bar = null;
+  let barPinned = false;
 
   function ensureInput() {
     if (input) return input;
@@ -146,6 +176,129 @@ export function createMobileKeyboard({ getRfb, onOpenChange }) {
     else rfb._remoteNumLock = null;
   }
 
+  // ── Special-keys bar ────────────────────────────────────────
+  // Built lazily on first open and reused after. The bar lives in this module
+  // rather than in desktop.html because its whole lifecycle is the keyboard's:
+  // it shows when the input takes focus, hides on every close path -- including
+  // the OS dismissing the keyboard on its own -- and must never take focus
+  // from the input, or the soft keyboard would close under it.
+
+  function ensureBar() {
+    if (bar) return bar;
+    bar = document.createElement('div');
+    bar.className = 'kb-special-bar';
+    bar.setAttribute('aria-label', 'Special keys');
+    for (const def of SPECIAL_KEYS) {
+      const btn = document.createElement('button');
+      btn.type = 'button';
+      btn.className = 'kb-special-key';
+      btn.textContent = def.label;
+      btn.dataset.code = def.code;
+      bar.appendChild(btn);
+    }
+    // preventDefault on pointerdown keeps focus on the off-screen input: a tap
+    // that moved focus would blur it and dismiss the soft keyboard mid-use.
+    // Scrolling the strip survives that -- touch-action:pan-x in the CSS
+    // governs it, not this handler.
+    bar.addEventListener('pointerdown', (e) => {
+      e.preventDefault();
+      const btn = e.target.closest('.kb-special-key');
+      if (!btn) return;
+      btn.classList.add('pressed');
+      pressSpecialKey(btn.dataset.code);
+    });
+    // Touch pointers are implicitly captured, so these land on the button the
+    // press started on even if the finger has moved off it.
+    const unpress = (e) => e.target.closest?.('.kb-special-key')?.classList.remove('pressed');
+    bar.addEventListener('pointerup', unpress);
+    bar.addEventListener('pointercancel', unpress);
+    // Long-pressing a key must not raise the text-selection callout.
+    bar.addEventListener('contextmenu', (e) => e.preventDefault());
+    document.body.appendChild(bar);
+    return bar;
+  }
+
+  function pressSpecialKey(code) {
+    const def = SPECIAL_KEYS.find((k) => k.code === code);
+    if (!def) return;
+    if (!def.sticky) {
+      sendKey(def.keysym, code, true, null, null);
+      sendKey(def.keysym, code, false, null, null);
+      // Ctrl and Alt latched, Del tapped: the keystroke just completed the
+      // combination, so the latched modifiers are spent.
+      releaseLatchedExcept(code);
+      return;
+    }
+    if (latched.has(code)) {
+      latched.delete(code);
+      sendKey(def.keysym, code, false, null, null);
+    } else {
+      latched.set(code, def.keysym);
+      sendKey(def.keysym, code, true, null, null);
+    }
+    updateLatchedUI();
+  }
+
+  // Sticky keys stay down until the next key that is not one of them: that is
+  // what turns "latch Ctrl, latch Alt, tap Del" into Ctrl+Alt+Del and "latch
+  // Win, type G" into Win+G. Called after a non-sticky key has been sent by
+  // any path -- the bar, a keydown from the soft keyboard, or the input
+  // fallback. `except` spares a key that is itself being pressed right now.
+  function releaseLatchedExcept(code) {
+    if (!latched.size) return;
+    const rfb = getRfb();
+    for (const [c, ks] of latched) {
+      if (c === code) continue;
+      if (rfb) rfb.sendKey(ks, c, false);
+      latched.delete(c);
+    }
+    updateLatchedUI();
+  }
+
+  function updateLatchedUI() {
+    if (!bar) return;
+    for (const btn of bar.querySelectorAll('.kb-special-key')) {
+      btn.classList.toggle('latched', latched.has(btn.dataset.code));
+    }
+  }
+
+  function showBar() {
+    ensureBar();
+    bar.hidden = false;
+    pinBarToViewport();
+    // On iOS the keyboard overlays the page without resizing the layout
+    // viewport; on Android it shrinks it. The visual viewport reports the
+    // keyboard's top edge in both, so tracking it is the one position formula
+    // that works everywhere -- and the resize/scroll events also carry the
+    // bar along the close animation if it were ever still visible then.
+    const vv = window.visualViewport;
+    if (vv && !barPinned) {
+      barPinned = true;
+      vv.addEventListener('resize', pinBarToViewport);
+      vv.addEventListener('scroll', pinBarToViewport);
+    }
+  }
+
+  function hideBar() {
+    if (bar) bar.hidden = true;
+    if (barPinned) {
+      barPinned = false;
+      const vv = window.visualViewport;
+      vv?.removeEventListener('resize', pinBarToViewport);
+      vv?.removeEventListener('scroll', pinBarToViewport);
+    }
+  }
+
+  // Bottom edge of the visible viewport in layout coordinates: on Android the
+  // soft keyboard shrinks the layout viewport, on iOS it overlays it, and in
+  // both cases this is the y coordinate the keyboard's top edge sits at.
+  function pinBarToViewport() {
+    if (!bar || bar.hidden) return;
+    const vv = window.visualViewport;
+    if (!vv) return;
+    bar.style.top = `${vv.offsetTop + vv.height}px`;
+  }
+
   function onKeyDown(e) {
     const rfb = getRfb();
     if (!rfb) return;
@@ -162,12 +315,14 @@ export function createMobileKeyboard({ getRfb, onOpenChange }) {
       const caps = mod(e, 'CapsLock'), num = mod(e, 'NumLock');
       sendKey(ks, code, true, caps, num);
       sendKey(ks, code, false, caps, num);
+      releaseLatchedExcept(code);
       return;
     }
 
     if (e.key && e.key.length === 1) remember(e.key);
     held.set(code, keysym);
     sendKey(keysym, code, true, mod(e, 'CapsLock'), mod(e, 'NumLock'));
+    releaseLatchedExcept(code);
   }
 
   function onKeyUp(e) {
@@ -207,6 +362,7 @@ export function createMobileKeyboard({ getRfb, onOpenChange }) {
       sendKey(ch.charCodeAt(0), 'Unidentified', true, null, null);
       sendKey(ch.charCodeAt(0), 'Unidentified', false, null, null);
     }
+    releaseLatchedExcept(null);
     if (recentlySent) setTimeout(() => { recentlySent = ''; }, 250);
   }
 
@@ -309,6 +465,8 @@ export function createMobileKeyboard({ getRfb, onOpenChange }) {
     // A reconnect mid-press replaces the RFB object; anything remembered from
     // the old session must not be released into the new one.
     held.clear();
+    latched.clear();
+    updateLatchedUI();
     recentlySent = '';
     // Re-capture on every open: a reconnect may have handed us an RFB with a
     // different resizeSession setting.
@@ -323,10 +481,15 @@ export function createMobileKeyboard({ getRfb, onOpenChange }) {
     // but an earlier scroll may not have been undone.
     window.scrollTo(0, 0);
     setOpen(true);
+    showBar();
   }
 
   function closeKeyboard() {
     releaseHeld();
+    // Latched sticky keys go up with the keyboard: leaving Ctrl held on the
+    // remote after it closes would poison every later click and keystroke.
+    releaseLatchedExcept(null);
+    hideBar();
     // Flip our state before blurring, so the blur that onInputBlur sees is
     // recognised as ours rather than as the OS closing the keyboard.
     setOpen(false, false);
