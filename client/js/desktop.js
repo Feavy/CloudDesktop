@@ -386,18 +386,22 @@ function toggleFullscreen() {
 }
 
 document.getElementById('topbar-fullscreen').addEventListener('click', toggleFullscreen);
+document.getElementById('btn-fullscreen').addEventListener('click', toggleFullscreen);
 
-// Expand/compress icon on the mobile toolbar button reflects the effective
-// state, whichever fullscreen flavor is in play.
+// Expand/compress icons on the fullscreen buttons (mobile toolbar + dock)
+// reflect the effective state, whichever fullscreen flavor is in play.
+// toggleAttribute, not the .hidden property: that only exists on HTMLElement,
+// so on SVG it would be an inert expando and the icon would never swap.
 function updateFullscreenBtn() {
   const fs = isFullscreen();
-  const btn = document.getElementById('mob-fullscreen');
-  if (!btn) return;
-  btn.querySelector('.fs-icon-expand').hidden = fs;
-  btn.querySelector('.fs-icon-compress').hidden = !fs;
+  for (const btn of document.querySelectorAll('#mob-fullscreen, #btn-fullscreen')) {
+    btn.querySelector('.fs-icon-expand').toggleAttribute('hidden', fs);
+    btn.querySelector('.fs-icon-compress').toggleAttribute('hidden', !fs);
+  }
 }
 
 let mobileFullscreen = false;
+updateFullscreenBtn();
 function toggleMobileFullscreen() {
   mobileFullscreen = !mobileFullscreen;
   document.body.classList.toggle('mobile-fullscreen', mobileFullscreen);
@@ -1425,25 +1429,6 @@ if (isIOS) {
   window.addEventListener('resize', setVH);
   window.addEventListener('orientationchange', () => setTimeout(setVH, 100));
   setVH();
-}
-
-// Auto-fullscreen for regular browsers (not PWA) — hides toolbar on first click
-if (!isStandalone) {
-  function enterFullscreenOnce(e) {
-    // Never hijack a tap on the keyboard or fullscreen buttons: entering
-    // fullscreen resizes the viewport, which would fight the soft keyboard the
-    // user just asked for, and the fullscreen button manages its own state.
-    if (e.target && e.target.closest && (e.target.closest('#mob-keyboard') || e.target.closest('#mob-fullscreen'))) return;
-    const el = document.documentElement;
-    const go = el.requestFullscreen || el.webkitRequestFullscreen || el.msRequestFullscreen;
-    if (go) go.call(el).catch(() => {});
-    document.removeEventListener('click', enterFullscreenOnce);
-    document.removeEventListener('touchstart', enterFullscreenOnce);
-  }
-  // Not { once: true }: the guard above has to be able to decline and stay
-  // registered for the next tap. The handler removes itself on success.
-  document.addEventListener('click', enterFullscreenOnce);
-  document.addEventListener('touchstart', enterFullscreenOnce);
 }
 
 // PWA standalone mode enhancements
