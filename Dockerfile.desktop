@@ -18,12 +18,19 @@ ENV DEBIAN_FRONTEND=noninteractive \
 # HOME is not set here on purpose: start-vnc derives it from the passwd entry,
 # so DESKTOP_USER stays the single place that decides which user we run as.
 
+# Space-separated extra locales to bake into the image, e.g. build with
+# --build-arg EXTRA_LOCALES="fr_FR.UTF-8 de_DE.UTF-8". Only en_US.UTF-8 is
+# generated otherwise; start-vnc also generates a missing locale on the fly
+# when LANG/LC_ALL names one, so this is an optimization rather than a
+# requirement.
+ARG EXTRA_LOCALES=
+
 # INSTALL_NODE=0 because the desktop does not need a JS runtime. Everything
 # else -- including the xclip/wmctrl/xrandr/cvt tooling the web client shells
 # out to -- is installed, so this image works unchanged if you later decide to
 # run the client inside it.
 COPY install.sh /tmp/install.sh
-RUN INSTALL_NODE=0 bash /tmp/install.sh && rm -f /tmp/install.sh
+RUN INSTALL_NODE=0 EXTRA_LOCALES="${EXTRA_LOCALES}" bash /tmp/install.sh && rm -f /tmp/install.sh
 
 # 6900 = websockify (the browser-facing port)
 EXPOSE 6900
