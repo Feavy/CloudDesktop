@@ -35,6 +35,10 @@ on:
         description: "Target platforms (multi-arch builds are slow)"
         type: string
         default: "linux/amd64"
+      self-hosted:
+        description: "Use self-hosted runners"
+        type: boolean
+        default: false
 
 env:
   REGISTRY: ghcr.io
@@ -52,7 +56,7 @@ concurrency:
 jobs:
   prep:
     name: Resolve registry coordinates
-    runs-on: ubuntu-latest
+    runs-on: ${{ inputs.self-hosted && 'self-hosted' || 'ubuntu-latest' }}
     outputs:
       owner: ${{ steps.vars.outputs.owner }}
       push: ${{ steps.vars.outputs.push }}
@@ -131,7 +135,7 @@ jobs:
     # clouddesktop-full is NOT in this matrix: it is built FROM the desktop
     # image, so it needs this job to have finished and pushed. See build-full.
     needs: prep
-    runs-on: ubuntu-latest
+    runs-on: ${{ inputs.self-hosted && 'self-hosted' || 'ubuntu-latest' }}
     timeout-minutes: 90
     strategy:
       fail-fast: false
@@ -247,7 +251,7 @@ jobs:
     # produce client and desktop, neither of which has a base dependency.
     needs: [prep, build]
     if: needs.prep.outputs.push == 'true'
-    runs-on: ubuntu-latest
+    runs-on: ${{ inputs.self-hosted && 'self-hosted' || 'ubuntu-latest' }}
     timeout-minutes: 90
     steps:
       - uses: actions/checkout@v4
@@ -333,7 +337,7 @@ jobs:
     # Only when images were actually pushed; the immutable sha tag is the new unique tag.
     needs: [prep, build, build-full]
     if: needs.prep.outputs.push == 'true'
-    runs-on: ubuntu-latest
+    runs-on: ${{ inputs.self-hosted && 'self-hosted' || 'ubuntu-latest' }}
     steps:
       - uses: feavy/deploy@main
         env:
