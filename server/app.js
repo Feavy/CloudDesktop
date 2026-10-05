@@ -52,6 +52,14 @@ app.use('/vendor/novnc', express.static(
   { setHeaders: noCache }
 ));
 
+// The service worker script must always revalidate: it is referenced by a
+// fixed URL (no ?cv= stamp to bust it), so no-cache is what lets the browser
+// pick up the new bytes after a deployment.
+app.get('/sw.js', (_req, res) => {
+  res.set('Cache-Control', 'no-cache');
+  res.sendFile(path.join(__dirname, '..', 'client', 'sw.js'));
+});
+
 // Serve client static files
 app.use(express.static(path.join(__dirname, '..', 'client'), {
   index: false,

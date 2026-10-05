@@ -24,6 +24,16 @@ let keyboard = null;
 
 initNotifications();
 
+// ── PWA ─────────────────────────────────────────────────────
+// Pass-through worker at /sw.js: its existence is what makes the browser
+// offer the app install prompt. Registration is best-effort; failure only
+// means no install prompt, not a broken desktop.
+if ('serviceWorker' in navigator) {
+    navigator.serviceWorker.register('/sw.js').catch((err) => {
+        console.warn('Service worker registration failed:', err);
+    });
+}
+
 // ── Device detection ────────────────────────────────────────
 const isTouch   = navigator.maxTouchPoints > 0 || window.matchMedia('(hover: none)').matches;
 const isIOS     = /iPad|iPhone|iPod/.test(navigator.userAgent) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
