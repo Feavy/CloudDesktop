@@ -1623,13 +1623,44 @@ if (isTouch) {
     mobRightBtn.classList.toggle('active', rightClickMode);
   });
 
-  // ── Pinch-to-zoom + two-finger pan ──
-  let pinchActive = false;
-  let lastPinchDist = 0;
-  let lastPinchCenter = null;
+  // ── Two-finger gestures: pinch-zoom, pan, remote scroll ──
+  // A gesture runs from the second finger touching down until fewer than two
+  // fingers remain. Its type is decided ONCE — from the first ~10px of
+  // movement, whichever accumulated more: finger-distance change → pinch,
+  // center-of-fingers movement → move — and then locked until the gesture
+  // ends. Deciding per gesture instead of feeding every move event into the
+  // zoom is what keeps two-finger scrolls from zooming: real fingers never
+  // hold a perfectly constant distance, and per-event zooming multiplies that
+  // jitter straight into the CSS scale, which then stuck because vncZoom
+  // never drops below 1 on its own.
+  //
+  // This is the ONLY two-finger touchmove listener. A second, bubble-phase
+  // listener could never run: the capture handler below stops propagation
+  // before the event reaches it.
+  let twoFingerSeen      = false; // a two-finger gesture happened in this touch sequence
+  let gestureMode        = null;  // null = undecided, then 'pinch' or 'move'
+  let gestureDistMoved   = 0;     // |Δfinger distance| accumulated this gesture
+  let gestureCenterMoved = 0;     // |Δcenter between fingers| accumulated
+  let lastDist   = 0;
+  let lastCenter = null;
+  let scrollAccX = 0, scrollAccY = 0;
+
+  const GESTURE_DECIDE_PX = 10;
 
   function touchDist(t0, t1) {
     return Math.hypot(t1.clientX - t0.clientX, t1.clientY - t0.clientY);
+  }
+
+  function centerOf(t0, t1) {
+    return { x: (t0.clientX + t1.clientX) / 2, y: (t0.clientY + t1.clientY) / 2 };
+  }
+
+  // Pan the magnified view so the point between the fingers follows them.
+  function panBy(dx, dy) {
+    const cw = vncContainer.clientWidth;
+    const ch = vncContainer.clientHeight;
+    panX = Math.max(0, Math.min(1, panX - dx / (cw * Math.max(0.01, vncZoom - 1))));
+    panY = Math.max(0, Math.min(1, panY - dy / (ch * Math.max(0.01, vncZoom - 1))));
   }
 
   // ═══ TRACKPAD TOUCH HANDLING ═══
@@ -1654,14 +1685,14 @@ if (isTouch) {
   // Two-finger          = pinch-zoom / pan
 
   vncContainer.addEventListener('touchstart', (e) => {
-    // Two-finger → pinch/pan
-    if (e.touches.length === 2) {
-      pinchActive = true;
-      lastPinchDist = touchDist(e.touches[0], e.touches[1]);
-      lastPinchCenter = {
-        x: (e.touches[0].clientX + e.touches[1].clientX) / 2,
-        y: (e.touches[0].clientY + e.touches[1].clientY) / 2,
-      };
+    // Two or more fingers → gesture start
+    if (e.touches.length >= 2) {
+      twoFingerSeen = true;
+      gestureMode = null;
+      gestureDistMoved = 0;
+      gestureCenterMoved = 0;
+      lastDist = touchDist(e.touches[0], e.touches[1]);
+      lastCenter = centerOf(e.touches[0], e.touches[1]);
       clearTimeout(longPressTimer);
       e.stopPropagation();
       e.preventDefault();
@@ -1678,6 +1709,7 @@ if (isTouch) {
     touchStartTime = Date.now();
     touchMoved = false;
     longPressFired = false;
+    twoFingerSeen = false;
 
     // Double-tap-and-hold → start drag
     if (Date.now() - lastTapTime < 300) {
@@ -1697,26 +1729,58 @@ if (isTouch) {
 
   vncContainer.addEventListener('touchmove', (e) => {
     e.stopPropagation();
-    // Two-finger pinch/pan
-    if (pinchActive && e.touches.length === 2) {
+    // Two-finger gesture: pinch, pan, or remote scroll
+    if (twoFingerSeen && e.touches.length >= 2) {
       e.preventDefault();
-      const dist = touchDist(e.touches[0], e.touches[1]);
-      const cx = (e.touches[0].clientX + e.touches[1].clientX) / 2;
-      const cy = (e.touches[0].clientY + e.touches[1].clientY) / 2;
-      if (lastPinchDist > 0) {
-        vncZoom = Math.max(1, Math.min(3, vncZoom * (dist / lastPinchDist)));
+      const t0 = e.touches[0];
+      const t1 = e.touches[1];
+      const dist   = touchDist(t0, t1);
+      const center = centerOf(t0, t1);
+
+      if (gestureMode === null) {
+        gestureDistMoved   += Math.abs(dist - lastDist);
+        gestureCenterMoved += Math.hypot(center.x - lastCenter.x, center.y - lastCenter.y);
+        // Not enough evidence yet — keep accumulating before committing.
+        if (Math.max(gestureDistMoved, gestureCenterMoved) < GESTURE_DECIDE_PX) {
+          lastDist = dist;
+          lastCenter = center;
+          return;
+        }
+        gestureMode = gestureDistMoved >= gestureCenterMoved ? 'pinch' : 'move';
       }
-      lastPinchDist = dist;
-      if (vncZoom > 1 && lastPinchCenter) {
-        const dx = cx - lastPinchCenter.x;
-        const dy = cy - lastPinchCenter.y;
-        const cw = vncContainer.clientWidth;
-        const ch = vncContainer.clientHeight;
-        panX = Math.max(0, Math.min(1, panX - dx / (cw * Math.max(0.01, vncZoom - 1))));
-        panY = Math.max(0, Math.min(1, panY - dy / (ch * Math.max(0.01, vncZoom - 1))));
+
+      if (gestureMode === 'pinch') {
+        if (lastDist > 0) {
+          vncZoom = Math.max(1, Math.min(3, vncZoom * (dist / lastDist)));
+        }
+        if (vncZoom > 1) panBy(center.x - lastCenter.x, center.y - lastCenter.y);
+        applyVncZoom();
+      } else if (vncZoom > 1) {
+        // Zoomed in: fingers moving together pan the magnified view.
+        panBy(center.x - lastCenter.x, center.y - lastCenter.y);
+        applyVncZoom();
+      } else {
+        // At 1:1: fingers moving together scroll the remote, like a trackpad.
+        // Natural direction — fingers up scroll the remote content forward.
+        // noVNC accumulates these pixel deltas and emits one wheel step per
+        // 50px, so smooth sub-pixel deltas are fine here.
+        scrollAccX += center.x - lastCenter.x;
+        scrollAccY += center.y - lastCenter.y;
+        const canvas = getCanvas();
+        if (canvas && (scrollAccX !== 0 || scrollAccY !== 0)) {
+          canvas.dispatchEvent(new WheelEvent('wheel', {
+            clientX: cursorX, clientY: cursorY,
+            deltaX: -scrollAccX, deltaY: -scrollAccY,
+            deltaMode: 0,
+            bubbles: true, cancelable: true, view: window,
+          }));
+          scrollAccX = 0;
+          scrollAccY = 0;
+        }
       }
-      lastPinchCenter = { x: cx, y: cy };
-      applyVncZoom();
+
+      lastDist = dist;
+      lastCenter = center;
       return;
     }
 
@@ -1743,9 +1807,19 @@ if (isTouch) {
   vncContainer.addEventListener('touchend', (e) => {
     e.stopPropagation();
     if (e.touches.length < 2) {
-      pinchActive = false;
-      lastPinchDist = 0;
-      lastPinchCenter = null;
+      // Fewer than two fingers left: the gesture is over.
+      gestureMode = null;
+      lastDist = 0;
+      lastCenter = null;
+      scrollAccX = 0;
+      scrollAccY = 0;
+      // One finger still down: re-anchor trackpad movement to it, so the
+      // cursor doesn't jump by how far finger one drifted while the gesture
+      // ran.
+      if (e.touches.length === 1) {
+        touchStartX = e.touches[0].clientX;
+        touchStartY = e.touches[0].clientY;
+      }
     }
 
     clearTimeout(longPressTimer);
@@ -1762,8 +1836,9 @@ if (isTouch) {
 
       const elapsed = Date.now() - touchStartTime;
 
-      // Tap → click
-      if (!touchMoved && !longPressFired && elapsed < TAP_MAX_DURATION) {
+      // Tap → click. A sequence that ever became a two-finger gesture (e.g. a
+      // quick two-finger flick scroll) is not a tap, however brief it was.
+      if (!touchMoved && !longPressFired && !twoFingerSeen && elapsed < TAP_MAX_DURATION) {
         if (rightClickMode) {
           clickAt(2);
           rightClickMode = false;
@@ -1775,31 +1850,6 @@ if (isTouch) {
       }
     }
   }, { capture: true });
-
-  // Two-finger scroll → mouse wheel
-  let scrollAccY = 0;
-  vncContainer.addEventListener('touchmove', (e) => {
-    if (e.touches.length !== 2 || !pinchActive) return;
-    // If fingers move together (not spreading), treat as scroll
-    const dist = touchDist(e.touches[0], e.touches[1]);
-    if (lastPinchDist > 0 && Math.abs(dist - lastPinchDist) < 5) {
-      const cy = (e.touches[0].clientY + e.touches[1].clientY) / 2;
-      if (lastPinchCenter) {
-        scrollAccY += cy - lastPinchCenter.y;
-        const canvas = getCanvas();
-        if (canvas && Math.abs(scrollAccY) > 20) {
-          const dir = scrollAccY > 0 ? -1 : 1; // natural scroll
-          canvas.dispatchEvent(new WheelEvent('wheel', {
-            clientX: cursorX, clientY: cursorY,
-            deltaY: dir * 120, deltaMode: 0,
-            bubbles: true, cancelable: true, view: window,
-          }));
-          scrollAccY = 0;
-        }
-      }
-    }
-  }, { passive: true });
-  vncContainer.addEventListener('touchend', () => { scrollAccY = 0; }, { passive: true });
 
   // Virtual keyboard. The module owns the off-screen input and the two
   // noVNC settings that must be suspended while it is open; see

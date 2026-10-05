@@ -69,6 +69,12 @@ html, body {
 #vnc-container {
   position: absolute;
   inset: var(--topbar-h) 0 0 0;
+  /* Every touch gesture on the canvas is ours (trackpad cursor, pinch,
+     two-finger scroll), so the compositor must never claim one — without
+     this a two-finger touch can become a browser pinch-zoom before the JS
+     handlers run. Previously only set below 600px, which left landscape
+     unprotected. */
+  touch-action: none;
 }
 
 body:has(#topbar.hidden) #vnc-container { inset: 0; }
@@ -824,7 +830,6 @@ body.mobile-fullscreen #vnc-container { inset: 0 !important; }
   /* VNC fills entire screen on mobile */
   #vnc-container {
     inset: 0;
-    touch-action: none;
   }
 
   /* ── Dock: compact horizontal bar from bottom ── */
