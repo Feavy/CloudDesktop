@@ -1535,13 +1535,22 @@ if (isTouch) {
   let touchMovedDist = 0;
   let longPressTimer = null;
   let longPressFired = false;
-  let isDragging = false;   // double-tap-hold drag
-  let lastTapTime = 0;
+  let isDragging = false;        // remote left button is held (drag)
+  // A completed tap is held in a buffer for DOUBLE_TAP_MS before it is sent,
+  // so the next touch can still reinterpret the gesture: a second touch that
+  // releases quickly is a double-click, one that is still on screen when the
+  // buffer expires is a drag. Nothing reaches the host until the buffer
+  // resolves, so a click's mouseup can never land inside a drag.
+  let pendingClick = null;       // {x, y} where the buffered click must land
+  let pendingClickTimer = null;
+  let secondTapDown = false;     // the reinterpretation touch is on screen
 
   const CURSOR_SPEED = 1.5;
   const TAP_MAX_DURATION = 300;
   const TAP_MAX_MOVE = 10;
   const LONG_PRESS_MS = 500;
+  const DOUBLE_TAP_MS = 300;
+  const DBL_CLICK_GAP_MS = 80;   // pause between the two clicks of a double-click
 
   mobileToolbar.hidden = false;
   touchCursor.hidden = false; // Always visible in trackpad mode
@@ -1563,12 +1572,12 @@ if (isTouch) {
   // mousedown/mouseup/mousemove directly to the canvas, so dispatching
   // pointermove and friends reaches nothing: the virtual cursor moved but the
   // server cursor never did, which is exactly the trackpad bug.
-  function sendMouse(type, button, buttons) {
+  function sendMouse(type, button, buttons, x = cursorX, y = cursorY) {
     const canvas = getCanvas();
     if (!canvas) return;
     canvas.dispatchEvent(new MouseEvent(type, {
-      clientX: cursorX, clientY: cursorY,
-      screenX: cursorX, screenY: cursorY,
+      clientX: x, clientY: y,
+      screenX: x, screenY: y,
       button, buttons,
       bubbles: true, cancelable: true, view: window,
     }));
@@ -1582,15 +1591,50 @@ if (isTouch) {
     sendMouse('mousemove', 0, isDragging ? 1 : 0);
   }
 
-  // Click at current cursor position
-  function clickAt(button) {
+  // Click at a position (default: current cursor position)
+  function clickAt(button, x = cursorX, y = cursorY) {
     const btns = button === 2 ? 2 : 1;
-    sendMouse('mousedown', button, btns);
+    sendMouse('mousedown', button, btns, x, y);
     setTimeout(() => {
-      sendMouse('mouseup', button, 0);
+      sendMouse('mouseup', button, 0, x, y);
       // Focusing a remote field must not cost us the soft keyboard.
       keyboard.refocus();
     }, 60);
+  }
+
+  // Two full click cycles back to back; the second starts only after the
+  // first has released, or the host sees one long press, not two clicks.
+  function dblClickAt(x, y) {
+    clickAt(0, x, y);
+    setTimeout(() => clickAt(0, x, y), DBL_CLICK_GAP_MS);
+  }
+
+  function cancelPendingClick() {
+    clearTimeout(pendingClickTimer);
+    pendingClickTimer = null;
+    pendingClick = null;
+  }
+
+  // The tap buffer expired: the gesture is decided, send what it resolved to.
+  function resolvePendingClick() {
+    pendingClickTimer = null;
+    if (secondTapDown) {
+      // A second touch is still on screen — holding (or sliding) it means
+      // drag, not click. Drop the buffered click and press the left button
+      // exactly once; it stays down until the finger lifts, and every move
+      // until then goes out pressed (moveCursor → mousemove).
+      pendingClick = null;
+      secondTapDown = false; // consumed: the next tap starts fresh
+      isDragging = true;
+      sendMouse('mousedown', 0, 1);
+      if (navigator.vibrate) navigator.vibrate(30);
+    } else if (pendingClick) {
+      // Plain tap: land the click where the tap happened, even if the cursor
+      // has moved on since.
+      const { x, y } = pendingClick;
+      pendingClick = null;
+      clickAt(0, x, y);
+    }
   }
 
   // ── Zoom ──
@@ -1669,9 +1713,11 @@ if (isTouch) {
   });
 
   // Single-finger drag  = move virtual cursor (like a trackpad)
-  // Tap (<300ms)        = left-click at cursor position
+  // Tap (<300ms)        = left-click at cursor position, buffered briefly so
+  //                       the next touch can still reinterpret the gesture
+  // Quick double tap    = double-click at cursor position
+  // Tap, touch again and hold or slide = left-button drag
   // Long-press (>500ms) = right-click at cursor position
-  // Double-tap + hold   = drag (mousedown + move)
   // Two-finger          = pinch-zoom / pan
 
   vncContainer.addEventListener('touchstart', (e) => {
@@ -1684,6 +1730,10 @@ if (isTouch) {
       lastDist = touchDist(e.touches[0], e.touches[1]);
       lastCenter = centerOf(e.touches[0], e.touches[1]);
       clearTimeout(longPressTimer);
+      // A scroll or pinch must never click, and the tap the gesture grew out
+      // of is no longer a double-click/drag candidate either.
+      cancelPendingClick();
+      secondTapDown = false;
       e.stopPropagation();
       e.preventDefault();
       return;
@@ -1701,11 +1751,15 @@ if (isTouch) {
     touchMovedDist = 0;
     longPressFired = false;
     twoFingerSeen = false;
+    secondTapDown = false;
 
-    // Double-tap-and-hold → start drag
-    if (Date.now() - lastTapTime < 300) {
-      isDragging = true;
-      sendMouse('mousedown', 0, 1);
+    // A touch while a tap sits in the buffer is the double-click / drag
+    // candidate. Its fate is decided when the buffer expires (finger still
+    // down → drag) or at its own release (quick lift → double-click), so no
+    // long-press timer here: holding this touch IS the drag gesture.
+    if (pendingClickTimer) {
+      secondTapDown = true;
+      return;
     }
 
     // Long-press timer → right-click
@@ -1819,7 +1873,7 @@ if (isTouch) {
 
     // All fingers lifted
     if (e.touches.length === 0) {
-      // End drag if active
+      // End drag if active: the drag finger just lifted.
       if (isDragging) {
         sendMouse('mouseup', 0, 0);
         isDragging = false;
@@ -1829,12 +1883,51 @@ if (isTouch) {
 
       const elapsed = Date.now() - touchStartTime;
 
-      // Tap → click. A sequence that ever became a two-finger gesture (e.g. a
-      // quick two-finger flick scroll) is not a tap, however brief it was.
-      if (!touchMoved && !longPressFired && !twoFingerSeen && elapsed < TAP_MAX_DURATION) {
-        clickAt(0);
-        lastTapTime = Date.now();
+      if (secondTapDown) {
+        // The reinterpretation touch lifted while the buffer was still
+        // running — had it held past expiry, the buffer would have started
+        // the drag and this would have been the drag's release above.
+        secondTapDown = false;
+        if (pendingClick && !touchMoved && !twoFingerSeen && !longPressFired
+            && elapsed < TAP_MAX_DURATION) {
+          // Clean, quick lift = the second click of a double-click. Flush
+          // both clicks now, where the buffered first tap happened.
+          const { x, y } = pendingClick;
+          cancelPendingClick();
+          dblClickAt(x, y);
+        }
+        // Otherwise this touch slid or overstayed — not a double-click. The
+        // buffer still holds the first tap's click and resolves on its own
+        // into a plain click.
+        return;
       }
+
+      // A sequence that ever became a two-finger gesture (e.g. a quick
+      // two-finger flick scroll) is not a tap, however brief it was.
+      if (touchMoved || longPressFired || twoFingerSeen || elapsed >= TAP_MAX_DURATION) {
+        return;
+      }
+
+      // First tap: don't click yet — hold it in the buffer so the next touch
+      // can still turn the sequence into a double-click or a drag.
+      pendingClick = { x: cursorX, y: cursorY };
+      pendingClickTimer = setTimeout(resolvePendingClick, DOUBLE_TAP_MS);
+    }
+  }, { capture: true });
+
+  // The system took the touches away (notification shade, palm rejection,
+  // incoming-call UI). Release whatever the host is holding so no pressed
+  // button or pending click survives the interrupted gesture. Marking the
+  // sequence as moved also stops a stray late touchend from being read as a
+  // tap — some browsers still deliver one after a cancel.
+  vncContainer.addEventListener('touchcancel', () => {
+    clearTimeout(longPressTimer);
+    cancelPendingClick();
+    secondTapDown = false;
+    touchMoved = true;
+    if (isDragging) {
+      sendMouse('mouseup', 0, 0);
+      isDragging = false;
     }
   }, { capture: true });
 
