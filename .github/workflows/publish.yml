@@ -319,6 +319,7 @@ jobs:
     steps:
       - uses: feavy/deploy@main
         env:
+          DEPLOYMENT: experimental-workspace
           BEARER_TOKEN: ${{ secrets.BEARER_TOKEN }}
           FILE_PATH: "kubernetes/apps/workspaces/experimental-workspace.yaml"
           YAML_PATH: ".spec.values.apps.experimental-workspace.image.tag"
