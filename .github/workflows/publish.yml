@@ -309,3 +309,17 @@ jobs:
               echo "$FENCE"
             fi
           } >> "$GITHUB_STEP_SUMMARY"
+
+  deploy:
+    name: Deploy
+    # Only when images were actually pushed; the immutable sha tag is the new unique tag.
+    needs: [prep, build, build-full]
+    if: needs.prep.outputs.push == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: feavy/deploy@main
+        env:
+          BEARER_TOKEN: ${{ secrets.BEARER_TOKEN }}
+          FILE_PATH: "kubernetes/apps/workspaces/experimental-workspace.yaml"
+          YAML_PATH: ".spec.values.apps.experimental-workspace.image.tag"
+          TAG: ${{ needs.prep.outputs.base_tag }}
