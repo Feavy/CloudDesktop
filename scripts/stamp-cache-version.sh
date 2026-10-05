@@ -9,24 +9,57 @@
 #  different resources.
 #
 #  Usage:
-#    CACHE_VERSION=<n> scripts/stamp-cache-version.sh   # CI: GitHub run number
-#    scripts/stamp-cache-version.sh                     # falls back to a hash
-#                                                       # of the client tree
+#    CACHE_VERSION=<n> stamp-cache-version.sh [client-dir]  # CI: run number
+#    stamp-cache-version.sh [client-dir]                    # local: a hash
+#                                                          # of the tree
+#
+#  The client tree is named explicitly rather than derived from this script's
+#  own location: the Dockerfiles copy the script to /tmp, where a
+#  dirname-based lookup resolves to a directory that has no client tree in it.
+#  Defaulting to ./client covers running it from the repo root, and both
+#  Dockerfiles pass /app/client explicitly.
+#
+#  This rewrites the client sources in place and is meant to run inside the
+#  image build, on a copy. Run against a checkout by hand, `git checkout` the
+#  client tree afterwards.
 # ============================================================================
 set -eu
 
-cd "$(dirname "$0")/.."
+CLIENT_DIR="${1:-${CLIENT_DIR:-client}}"
+
+if [ ! -d "$CLIENT_DIR" ]; then
+    echo "stamp-cache-version: no client tree at '${CLIENT_DIR}' (cwd $(pwd))" >&2
+    exit 1
+fi
 
 if [ -z "${CACHE_VERSION:-}" ]; then
     # Local builds have no run number; a content hash of the client tree
     # changes whenever any client file does, which is what cache busting needs.
-    CACHE_VERSION="$(find client -type f -print0 | sort -z | xargs -0 md5sum | md5sum | cut -c1-12)"
+    CACHE_VERSION="$(find "$CLIENT_DIR" -type f -print0 | sort -z | xargs -0 md5sum | md5sum | cut -c1-12)"
 fi
 
-# Stamp every file that carries the placeholder (desktop.html, the module
-# imports in js/*.js and the icons in manifest.json today). Kept content-based
-# so adding a reference with the placeholder is enough; no list to maintain.
-for f in $(grep -rl '%CACHE_VERSION%' client --include='*.html' --include='*.js' --include='*.json'); do
-    sed -i "s/%CACHE_VERSION%/${CACHE_VERSION}/g" "$f"
-    echo "stamped ${CACHE_VERSION} -> ${f}"
+# Candidate files are picked by extension, and only the ones that actually
+# carry the placeholder are rewritten. The extension filter is what keeps sed
+# away from the binaries (PNGs, fonts) that a plain recursive grep would match
+# and corrupt; the grep keeps the rest content-based, so adding a reference
+# with the placeholder is enough and there is no list to maintain.
+stamped=0
+for f in $(find "$CLIENT_DIR" -type f \( -name '*.html' -o -name '*.js' -o -name '*.json' \)); do
+    if grep -q '%CACHE_VERSION%' "$f"; then
+        sed -i "s/%CACHE_VERSION%/${CACHE_VERSION}/g" "$f"
+        stamped=$((stamped + 1))
+        echo "stamped ${CACHE_VERSION} -> ${f}"
+    fi
 done
+
+# Stamping nothing is a failure, not a no-op: the image would ship the literal
+# %CACHE_VERSION% in every asset URL, so ?cv= stops varying between deploys and
+# browsers keep serving the old files out of the immutable cache. That is the
+# exact failure this script exists to prevent, and it has to break the build
+# loudly rather than pass quietly.
+if [ "$stamped" -eq 0 ]; then
+    echo "stamp-cache-version: no %CACHE_VERSION% placeholders found under '${CLIENT_DIR}'" >&2
+    exit 1
+fi
+
+echo "stamp-cache-version: stamped $stamped file(s) with ${CACHE_VERSION}"
