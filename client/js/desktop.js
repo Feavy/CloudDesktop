@@ -414,10 +414,47 @@ function toggleMobileFullscreen() {
   }
 }
 
+// Chromium-only: while the page is in real fullscreen, the Keyboard Lock
+// API hands OS-reserved keys (Win, Alt+Tab, most browser shortcuts) to
+// the page instead of the host OS, so they reach noVNC and the remote.
+// No-op on Firefox/Safari (no API) and iOS (fullscreen is a CSS trick).
+// Escape stays special: the browser exits fullscreen only when Esc is
+// held ~3s, otherwise it is delivered to the page and forwarded.
+function applyKeyboardLock() {
+  if (!navigator.keyboard || !navigator.keyboard.lock) return;
+  if (document.fullscreenElement) {
+    navigator.keyboard.lock().catch(() => {});
+  } else if (navigator.keyboard.unlock) {
+    navigator.keyboard.unlock();
+  }
+}
+
 document.addEventListener('fullscreenchange', () => {
+  applyKeyboardLock();
   updateFullscreenBtn();
   if (!document.fullscreenElement) applyTopbar();
 });
+
+// Route F11 through toggleFullscreen instead of letting it reach the
+// remote. Chrome dispatches F11 as a cancellable keydown, so
+// preventDefault() stops the native fullscreen and ours (with keyboard
+// lock) takes over; under keyboard lock Chrome also hands F11 to the
+// page, which would otherwise leave it pressed on the remote. Firefox
+// never sends F11 to the page: its native fullscreen fires
+// fullscreenchange, and applyKeyboardLock() engages there anyway.
+// Capture phase + stopPropagation: noVNC listens on vncContainer below
+// document, so a bubble-phase handler would run too late to keep the
+// key from being forwarded.
+for (const type of ['keydown', 'keyup']) {
+  document.addEventListener(type, (e) => {
+    if (e.key === 'F11') {
+      e.preventDefault();
+      e.stopPropagation();
+      if (type === 'keydown') toggleFullscreen();
+    }
+  }, true);
+}
+
 document.addEventListener('webkitfullscreenchange', () => {
   updateFullscreenBtn();
   if (!document.webkitFullscreenElement) applyTopbar();
