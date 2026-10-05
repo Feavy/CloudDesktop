@@ -1157,6 +1157,7 @@ svg.fs-icon-expand[hidden], svg.fs-icon-compress[hidden] { display: none; }
 .kb-special-bar[hidden] { display: none; }
 
 .kb-special-key {
+  position: relative;
   flex: 0 0 auto;
   min-width: 54px;
   height: 40px;
@@ -1175,6 +1176,21 @@ svg.fs-icon-expand[hidden], svg.fs-icon-compress[hidden] { display: none; }
   transition: background 0.12s;
 }
 .kb-special-key.pressed { background: rgba(255, 255, 255, 0.2); }
+/* Sticky keys carry a small dash below the label: the mark of a key that can
+   stay pressed. It brightens while latched so the held state is legible too. */
+.kb-special-key.sticky::after {
+  content: '';
+  position: absolute;
+  left: 50%;
+  bottom: 5px;
+  width: 14px;
+  height: 2.5px;
+  border-radius: 2px;
+  background: currentColor;
+  opacity: 0.45;
+  transform: translateX(-50%);
+}
+.kb-special-key.sticky.latched::after { opacity: 0.9; }
 /* Sticky keys while latched (down on the remote desktop) */
 .kb-special-key.latched {
   background: var(--accent);
