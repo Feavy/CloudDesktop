@@ -1853,6 +1853,11 @@ if (isTouch) {
 
   document.getElementById('mob-keyboard').addEventListener('click', (e) => {
     e.stopPropagation();
+    // keyboard.toggle() focuses the off-screen input mid-tap, which cancels the
+    // button's :active state on touch; play the press feedback by class.
+    const btn = e.currentTarget;
+    btn.classList.add('pressed');
+    setTimeout(() => btn.classList.remove('pressed'), 150);
     keyboard.toggle();
   });
 

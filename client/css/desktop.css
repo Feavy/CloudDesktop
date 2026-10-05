@@ -1098,6 +1098,9 @@ body {
   transition: background 0.12s, transform 0.1s;
 }
 .mob-btn:active { background: rgba(255, 255, 255, 0.18); transform: scale(0.92); }
+/* The keyboard button focuses the off-screen input mid-tap, which cancels
+   :active on touch; its press feedback is applied by class instead. */
+.mob-btn.pressed { background: rgba(255, 255, 255, 0.18); transform: scale(0.92); }
 .mob-btn svg { width: 20px; height: 20px; }
 /* SVG has no UA style for [hidden] — used by the fullscreen icon swap */
 svg.fs-icon-expand[hidden], svg.fs-icon-compress[hidden] { display: none; }
