@@ -389,6 +389,17 @@ export XDG_CURRENT_DESKTOP=XFCE
 vncconfig -nowin >/dev/null 2>&1 &
 autocutsel -fork -selection CLIPBOARD >/dev/null 2>&1 &
 
+# XFCE binds nothing to a bare Super (Windows) key, so the key events the VNC
+# client forwards -- from a physical keyboard or from the on-screen sticky Win
+# key -- arrive at X and are simply ignored. Bind Super_L to the Applications
+# menu that is already on the stock panel: the closest thing XFCE has to a
+# Start button. xfconfd is D-Bus activated on demand, and failure here is not
+# fatal; it just leaves Super unbound as before. Set before xfce4-session so
+# its shortcut manager picks the binding up at startup.
+xfconf-query -c xfce4-keyboard-shortcuts \
+    -p /commands/custom/Super_L \
+    -n -t string -s xfce4-popup-applicationsmenu >/dev/null 2>&1 || true
+
 # Become the desktop.
 #
 # This must block. Backgrounding xfce4-session and letting this script fall off
