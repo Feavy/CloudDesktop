@@ -237,6 +237,18 @@ check_bin autocutsel     autocutsel
 check_bin xcape          xcape
 log "XFCE verified"
 
+# Slimmed base images sometimes dpkg-path-exclude every .mo under
+# /usr/share/locale to save space. Everything then installs "successfully" and
+# dpkg -L still lists the catalogs, but none are on disk -- so the desktop
+# stays in English no matter what LANG/LC_ALL say, and only apps that bundle
+# their own translations (Chrome) respond to a language change. dpkg reports
+# nothing, so probe the filesystem directly.
+if ! ls /usr/share/locale/*/LC_MESSAGES/*.mo >/dev/null 2>&1; then
+    warn "No translation catalogs (.mo) were unpacked under /usr/share/locale."
+    warn "The base image likely dpkg-path-excludes them; the desktop will stay in English regardless of LANG/LC_ALL."
+    warn "Fix: add 'path-include=/usr/share/locale/*/LC_MESSAGES/*.mo' after the exclude in the dpkg config and rebuild."
+fi
+
 # ─────────────────────────────────────────────────────────────────────────────
 # 7. Desktop applications
 #
