@@ -305,6 +305,12 @@ fi
 #    is missing, so a build without them ships a half-empty dock. Set the
 #    matching INSTALL_* to 0 to slim the image down again.
 # ─────────────────────────────────────────────────────────────────────────────
+# Synaptic: the GTK package manager. Recommends are kept so the "run in
+# terminal" actions (which shell out to xterm) work as a user expects.
+log "Installing Synaptic package manager"
+apt-get install -y -qq synaptic
+check_bin synaptic synaptic
+
 if [ "${INSTALL_BROWSERS:-1}" = "1" ]; then
     log "Installing Google Chrome"
     curl -fsSL -o /tmp/chrome.deb \
