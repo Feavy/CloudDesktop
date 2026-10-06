@@ -541,8 +541,11 @@ fi
 restore_session_translations() {
     local lang pkgs
     lang="${SESSION_LOCALE%%_*}"
+    # "en" needs no restore: gettext falls back to the msgids themselves,
+    # which are English, so a stripped image is indistinguishable from a
+    # translated one (en_* locales all reduce to the same language code).
     case "$lang" in
-        ""|C|POSIX|c) return 0 ;;
+        ""|C|POSIX|c|en) return 0 ;;
     esac
     if ls /usr/share/locale/*/LC_MESSAGES/*.mo >/dev/null 2>&1; then
         return 0
