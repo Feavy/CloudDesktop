@@ -262,6 +262,7 @@ apt-get install -y -qq \
     xfce4-screenshooter \
     xcape \
     adwaita-icon-theme \
+    xfce4-whiskermenu-plugin \
     dbus-user-session
 
 log "Installing fonts (without these the desktop renders with tofu boxes)"
@@ -283,6 +284,11 @@ check_bin thunar         thunar
 check_bin mousepad       mousepad
 check_bin autocutsel     autocutsel
 check_bin xcape          xcape
+
+# Whisker is a panel plugin: no binary lands on $PATH, so check for the
+# loadable module instead (the path carries the multiarch triplet).
+ls /usr/lib/*/xfce4/panel/plugins/libwhiskermenu.so >/dev/null 2>&1 \
+    || die "whiskermenu panel plugin missing after install. It should come from 'xfce4-whiskermenu-plugin'."
 log "XFCE verified"
 
 # Slimmed base images sometimes dpkg-path-exclude every .mo under
@@ -298,7 +304,215 @@ if ! ls /usr/share/locale/*/LC_MESSAGES/*.mo >/dev/null 2>&1; then
 fi
 
 # ─────────────────────────────────────────────────────────────────────────────
-# 8. Desktop applications
+# 8. Look and feel: Orchis theme + a Windows-style bottom taskbar
+#
+#    The stock XFCE look is functional but spartan. Two things change it:
+#
+#    - The Orchis GTK theme (github.com/vinceliuice/orchis-theme), compiled
+#      with the "compact" tweak and the compact size variant, so controls are
+#      dense and Windows-like. Runs `sassc` at build time; the theme lands in
+#      /usr/share/themes/Orchis-Compact{,-Light,-Dark}. Skipped when the
+#      theme is already present, because Dockerfile.full re-runs this script
+#      on top of the desktop image and the compile is the expensive step.
+#    - System-wide xfconf defaults that move the panel to the bottom edge and
+#      swap the Applications menu for Whisker Menu, whose search field and
+#      favorites read like the Windows start menu. xfconfd takes these files
+#      as a channel's defaults for any user without their own override, so a
+#      fresh home picks the layout up with no per-user setup.
+# ─────────────────────────────────────────────────────────────────────────────
+THEME_NAME="Orchis-Compact"
+
+if [ ! -d "/usr/share/themes/${THEME_NAME}" ]; then
+    log "Installing Orchis theme (compact, with the compact tweak)"
+    # sassc compiles the SCSS sources; murrine is the GTK2 engine Synaptic
+    # needs to follow the theme; gnome-themes-extra pulls Adwaita's GTK2 bits.
+    apt-get install -y -qq --no-install-recommends \
+        sassc gtk2-engines-murrine gnome-themes-extra git
+    git clone --depth=1 https://github.com/vinceliuice/orchis-theme.git /tmp/orchis-theme
+    # -s compact selects the compact size variant (controls rendered smaller);
+    # --tweaks compact selects the compact/no-floating-panel tweak. Standard,
+    # light and dark color variants are all installed; the accent is the
+    # default blue.
+    (cd /tmp/orchis-theme && ./install.sh -s compact --tweaks compact) \
+        || die "Orchis theme installation failed"
+    # Orchis ships a matching wallpaper; bake one in for the default backdrop.
+    mkdir -p /usr/share/backgrounds
+    install -m 0644 /tmp/orchis-theme/wallpaper/1080p.jpg \
+        /usr/share/backgrounds/orchis-1080p.jpg
+    rm -rf /tmp/orchis-theme
+else
+    log "Orchis theme already installed; skipping the build"
+fi
+[ -d "/usr/share/themes/${THEME_NAME}" ] || die "${THEME_NAME} theme not found after install"
+[ -f /usr/share/backgrounds/orchis-1080p.jpg ] || warn "Orchis wallpaper missing; the default backdrop will be empty"
+log "Orchis theme verified (${THEME_NAME})"
+
+XDG_CONF_DIR=/etc/xdg/xfce4
+XCONF_DIR="${XDG_CONF_DIR}/xfconf/xfce-perchannel-xml"
+mkdir -p "$XCONF_DIR"
+
+# Panel: one full-width bar snapped to the bottom edge, Windows-taskbar style.
+# The position string is "p=<snap>;x=<x>;y=<y>" (xfce4-panel >= 4.16): snap 12
+# is SNAP_POSITION_S, the bottom edge. Plugins left to right: Whisker start
+# menu, a gap, the window buttons, a stretching gap, tray, clock and a
+# show-desktop sliver on the far right.
+log "Writing the bottom taskbar panel defaults"
+cat > "${XCONF_DIR}/xfce4-panel.xml" <<PANEL
+<?xml version="1.0" encoding="UTF-8"?>
+<channel name="xfce4-panel" version="1.0">
+  <property name="configver" type="int" value="2"/>
+  <property name="panels" type="uint" value="1"/>
+  <property name="panel-1" type="empty">
+    <property name="mode" type="uint" value="0"/>
+    <property name="position" type="string" value="p=12;x=0;y=0"/>
+    <property name="size" type="uint" value="40"/>
+    <property name="length" type="double" value="100.0"/>
+    <property name="autohide-behavior" type="uint" value="0"/>
+    <property name="enable-struts" type="bool" value="true"/>
+    <property name="plugin-ids" type="array">
+      <value type="int" value="1"/>
+      <value type="int" value="2"/>
+      <value type="int" value="3"/>
+      <value type="int" value="4"/>
+      <value type="int" value="5"/>
+      <value type="int" value="6"/>
+      <value type="int" value="7"/>
+    </property>
+  </property>
+  <property name="plugin-1" type="string" value="whiskermenu">
+    <!-- Whisker >= 2.8 keeps its settings in the panel's xfconf channel,
+         under this plugin's property base, so the button icon rides along
+         here. A grid icon reads as the Windows start button. -->
+    <property name="button-icon" type="string" value="view-grid"/>
+  </property>
+  <property name="plugin-2" type="string" value="separator">
+    <property name="style" type="uint" value="0"/>
+    <property name="expand" type="bool" value="false"/>
+  </property>
+  <property name="plugin-3" type="string" value="tasklist">
+    <!-- One button per window, like Windows: no grouping, flat buttons with
+         labels, and windows from every workspace listed so a workspace switch
+         can never orphan the taskbar. -->
+    <property name="grouping" type="bool" value="false"/>
+    <property name="flat-buttons" type="bool" value="true"/>
+    <property name="show-labels" type="bool" value="true"/>
+    <property name="include-all-workspaces" type="bool" value="true"/>
+  </property>
+  <property name="plugin-4" type="string" value="separator">
+    <property name="style" type="uint" value="0"/>
+    <property name="expand" type="bool" value="true"/>
+  </property>
+  <property name="plugin-5" type="string" value="systray"/>
+  <property name="plugin-6" type="string" value="clock">
+    <!-- 2 = CLOCK_PLUGIN_MODE_DIGITAL: time and date, like Windows. -->
+    <property name="mode" type="uint" value="2"/>
+  </property>
+  <property name="plugin-7" type="string" value="showdesktop"/>
+</channel>
+PANEL
+
+# Application theme. The stock xsettings defaults are kept and only the theme
+# entries change; xfsettingsd falls back to its built-in defaults for anything
+# missing, but keeping the file complete costs nothing and is easier to diff
+# against upstream.
+log "Writing the Orchis theme defaults"
+cat > "${XCONF_DIR}/xsettings.xml" <<XSETTINGS
+<?xml version="1.0" encoding="UTF-8"?>
+<channel name="xsettings" version="1.0">
+  <property name="Net" type="empty">
+    <property name="ThemeName" type="string" value="${THEME_NAME}"/>
+    <property name="IconThemeName" type="string" value="Adwaita"/>
+    <property name="DoubleClickTime" type="int" value="400"/>
+    <property name="DoubleClickDistance" type="int" value="5"/>
+    <property name="DndDragThreshold" type="int" value="8"/>
+    <property name="CursorBlink" type="bool" value="true"/>
+    <property name="CursorBlinkTime" type="int" value="1200"/>
+    <property name="SoundThemeName" type="string" value="default"/>
+    <property name="EnableEventSounds" type="bool" value="false"/>
+    <property name="EnableInputFeedbackSounds" type="bool" value="false"/>
+  </property>
+  <property name="Xft" type="empty">
+    <property name="DPI" type="empty"/>
+    <property name="Antialias" type="int" value="-1"/>
+    <property name="Hinting" type="int" value="-1"/>
+    <property name="HintStyle" type="string" value="hintslight"/>
+    <property name="RGBA" type="string" value="rgb"/>
+  </property>
+  <property name="Gtk" type="empty">
+    <property name="CanChangeAccels" type="bool" value="false"/>
+    <property name="ColorPalette" type="string" value="black:white:gray50:red:purple:blue:light blue:green:yellow:orange:lavender:brown:goldenrod4:dodger blue:pink:light green:gray10:gray30:gray75:gray90"/>
+    <property name="FontName" type="string" value="Sans 10"/>
+    <property name="MonospaceFontName" type="string" value="Monospace 10"/>
+    <property name="IconSizes" type="string" value=""/>
+    <property name="KeyThemeName" type="string" value=""/>
+    <property name="ToolbarStyle" type="string" value="icons"/>
+    <property name="ToolbarIconSize" type="int" value="3"/>
+    <property name="MenuImages" type="bool" value="true"/>
+    <property name="ButtonImages" type="bool" value="true"/>
+    <property name="MenuBarAccel" type="string" value="F10"/>
+    <property name="CursorThemeName" type="string" value="Adwaita"/>
+    <property name="CursorThemeSize" type="int" value="0"/>
+    <property name="DecorationLayout" type="string" value=":minimize,maximize,close"/>
+    <property name="DialogsUseHeader" type="bool" value="false"/>
+    <property name="TitlebarMiddleClick" type="string" value="lower"/>
+  </property>
+  <property name="Gdk" type="empty">
+    <property name="WindowScalingFactor" type="int" value="1"/>
+  </property>
+</channel>
+XSETTINGS
+
+# Window decorations. Orchis ships a matching xfwm4 theme inside its theme
+# directory, so the titlebars follow the widgets.
+cat > "${XCONF_DIR}/xfwm4.xml" <<XFWM
+<?xml version="1.0" encoding="UTF-8"?>
+<channel name="xfwm4" version="1.0">
+  <property name="general" type="empty">
+    <property name="theme" type="string" value="${THEME_NAME}"/>
+    <property name="button_layout" type="string" value="O|HMC"/>
+  </property>
+</channel>
+XFWM
+
+# Wallpaper. TigerVNC names its RandR output VNC-0 (older trees say Virtual-0);
+# per-monitor entries for names that never exist are simply unused, so write
+# the candidates rather than guessing one. Zoomed (5) fills the screen without
+# distorting the image.
+log "Writing the wallpaper defaults"
+cat > "${XCONF_DIR}/xfce4-desktop.xml" <<DESKTOP
+<?xml version="1.0" encoding="UTF-8"?>
+<channel name="xfce4-desktop" version="1.0">
+  <property name="backdrop" type="empty">
+    <property name="screen0" type="empty">
+      <property name="monitorVNC-0" type="empty">
+        <property name="workspace0" type="empty">
+          <property name="last-image" type="string" value="/usr/share/backgrounds/orchis-1080p.jpg"/>
+          <property name="image-style" type="uint" value="5"/>
+        </property>
+      </property>
+      <property name="monitorVirtual-0" type="empty">
+        <property name="workspace0" type="empty">
+          <property name="last-image" type="string" value="/usr/share/backgrounds/orchis-1080p.jpg"/>
+          <property name="image-style" type="uint" value="5"/>
+        </property>
+      </property>
+    </property>
+  </property>
+</channel>
+DESKTOP
+
+# The bare-Super bridge in xfce-vnc-session turns Super into Alt+F1, and the
+# stock default binds Alt+F1 to the Applications menu popup -- which the panel
+# above no longer contains. Repoint the stock default at Whisker so the
+# Windows-key behavior survives the menu swap.
+KBD_DEFAULTS="${XCONF_DIR}/xfce4-keyboard-shortcuts.xml"
+if [ -f "$KBD_DEFAULTS" ] && grep -q 'xfce4-popup-applicationsmenu' "$KBD_DEFAULTS"; then
+    log "Rebinding Alt+F1 to the Whisker menu"
+    sed -i 's/value="xfce4-popup-applicationsmenu"/value="xfce4-popup-whiskermenu"/' "$KBD_DEFAULTS"
+fi
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 9. Desktop applications
 #
 #    Chrome and VS Code are installed by default: they are what the dock
 #    exists for, and the dock hides an icon automatically when the binary is
@@ -318,7 +532,7 @@ check_bin synaptic synaptic
 # session anyway, so launching from the applications menu silently does
 # nothing (pkexec only works from a terminal, through its built-in text
 # prompt). Route the menu entry through the passwordless sudo configured in
-# section 9 instead: DISPLAY survives sudo's env_reset, and XAUTHORITY is
+# section 10 instead: DISPLAY survives sudo's env_reset, and XAUTHORITY is
 # forwarded explicitly so the root GUI lands on the user's own X server. The
 # override sits in /usr/local/share/applications, which XDG_DATA_DIRS ranks
 # ahead of /usr/share, so a synaptic package upgrade cannot revert it.
@@ -398,7 +612,7 @@ if [ "${INSTALL_DOCS:-0}" = "1" ]; then
 fi
 
 # ─────────────────────────────────────────────────────────────────────────────
-# 9. Unprivileged runtime user
+# 10. Unprivileged runtime user
 #
 #    The desktop runs as this user, not root. Xtigervnc and XFCE both want a
 #    writable $HOME for .Xauthority, ~/.vnc and D-Bus sockets, and running as
@@ -484,7 +698,7 @@ chmod 0440 "/etc/sudoers.d/${DESKTOP_USER}"
 log "Runtime user: $DESKTOP_USER (uid $DESKTOP_UID), home $DESKTOP_HOME, passwordless sudo"
 
 # ─────────────────────────────────────────────────────────────────────────────
-# 10. X startup script
+# 11. X startup script
 #
 #    start-vnc runs this as an ordinary child process, so this script's own
 #    lifetime IS the session's lifetime. It ends by exec'ing the desktop,
@@ -531,14 +745,15 @@ export XDG_CURRENT_DESKTOP=XFCE
 vncconfig -nowin >/dev/null 2>&1 &
 autocutsel -fork -selection CLIPBOARD >/dev/null 2>&1 &
 
-# A bare Super (Windows) key press must open the Applications menu, but
+# A bare Super (Windows) key press must open the Whisker start menu, but
 # XFCE's shortcut engine cannot grab a bare modifier: the key events arrive
 # at X (from a physical keyboard or the on-screen sticky Win key alike) and
 # are ignored no matter what is bound in xfconf -- verified live, a
 # successfully-set /commands/custom/Super_L binding does nothing. xcape is
 # the standard bridge: a Super press+release with no other key in between
-# becomes Alt+F1, which the stock session already binds to
-# xfce4-popup-applicationsmenu. Held-Super combos are unaffected; xcape
+# becomes Alt+F1, which the session keyboard defaults bind to
+# xfce4-popup-whiskermenu (repointed from the Applications menu popup by the
+# look-and-feel section above). Held-Super combos are unaffected; xcape
 # steps aside whenever a second key is pressed first. stderr is kept in a
 # file rather than discarded because this exact step failed silently once
 # already; /tmp is per-pod, so the log never grows across restarts.
@@ -560,7 +775,7 @@ SESSION
 chmod +x /usr/local/bin/xfce-vnc-session
 
 # ─────────────────────────────────────────────────────────────────────────────
-# 11. Xtigervnc launcher
+# 12. Xtigervnc launcher
 #
 #    -SecurityTypes None is deliberate: the browser client has no VNC password
 #    field and sends an empty credential. If you enable VNC auth you must also
@@ -711,12 +926,12 @@ STARTVNC
 chmod +x /usr/local/bin/start-vnc
 
 # ─────────────────────────────────────────────────────────────────────────────
-# 12. Wrap Xtigervnc's own launcher so `startvnc` behaves predictably
+# 13. Wrap Xtigervnc's own launcher so `startvnc` behaves predictably
 # ─────────────────────────────────────────────────────────────────────────────
 ln -sf /usr/local/bin/start-vnc /usr/local/bin/start-desktop
 
 # ─────────────────────────────────────────────────────────────────────────────
-# 13. Cleanup
+# 14. Cleanup
 # ─────────────────────────────────────────────────────────────────────────────
 log "Cleaning apt cache"
 apt-get clean
