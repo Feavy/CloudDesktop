@@ -127,9 +127,11 @@ Extras:
 
 | Variable | Default | Effect |
 |---|---|---|
+| `UNMINIMIZE` | `1` | Run the base image's stock `unminimize` at build time, restoring the man pages, docs and translation catalogs the minimized `ubuntu:24.04` image dpkg-strips (without them the desktop stays in English regardless of `LANG`/`LC_ALL`) |
+| `INSTALL_TOOLS` | `1` | Common Linux command-line tools: git, vim, nano, htop, tmux, jq, zip/unzip, rsync, net-tools, dnsutils, bash-completion, man pages and friends |
+| `EXTRA_LOCALES` | *(empty)* | Extra locales baked in at build time, space-separated (`--build-arg EXTRA_LOCALES="fr_FR.UTF-8 de_DE.UTF-8"`). Only `en_US.UTF-8` is generated otherwise; `start-vnc` also generates a missing session locale on the fly at startup |
 | `INSTALL_NODE` | `1` | Install Node.js from NodeSource (Ubuntu's own is 18, EOL). `Dockerfile.desktop` sets this to `0` |
 | `NODE_MAJOR` | `22` | NodeSource major version |
-| `RESTORE_LOCALES` | `1` | At startup, reinstall translation catalogs when the base image dpkg-strips them (desktop would otherwise stay in English); set `0` to opt out |
 
 Installed-by-default desktop apps (set `0` to slim the image down):
 

@@ -18,11 +18,13 @@
 #    INSTALL_FIREFOX=0    Firefox
 #    INSTALL_VSCODE=0     Visual Studio Code (the dock's "VS Code" icon)
 #    INSTALL_DOCS=0       LibreOffice
+#    UNMINIMIZE=0         skip running the base image's stock `unminimize`,
+#                         which restores the man pages, docs and translation
+#                         catalogs the minimized ubuntu:24.04 image dpkg-strips
+#    INSTALL_TOOLS=0      skip the common Linux command-line tools
 #    EXTRA_LOCALES        extra locales to bake in, space-separated, e.g.
 #                         "fr_FR.UTF-8 de_DE.UTF-8" (en_US.UTF-8 is always
 #                         generated; see also start-vnc's on-the-fly fallback)
-#    RESTORE_LOCALES=0    opt out of start-vnc reinstalling translation
-#                         catalogs stripped by the base image's dpkg excludes
 #    DISPLAY_GEOMETRY=1920x1080
 #    VNC_PORT=5900        raw RFB port
 #    VNC_WS_PORT=6900     websockify port
@@ -90,6 +92,31 @@ EOF
 # ─────────────────────────────────────────────────────────────────────────────
 log "Installing base system"
 apt-get update -qq
+
+# Un-minimize the base image.
+#
+# The ubuntu:24.04 Docker image is the minimized cloud variant: dpkg
+# path-excludes in /etc/dpkg/dpkg.cfg.d/ throw away man pages, docs and every
+# translation catalog (.mo) at unpack time, and packages install "successfully"
+# with none of those files on disk. /usr/bin/unminimize is the stock tool that
+# undoes this -- it removes the excludes and reinstalls every installed package
+# whose files were dropped. Running it here, before anything else, means all
+# later installs ship their man pages, docs and .mo catalogs normally and the
+# desktop can follow LANG/LC_ALL without any runtime fix-up. Costs a couple of
+# minutes on a minimized base; instant on one that is not minimized.
+if [ "${UNMINIMIZE:-1}" = "1" ]; then
+    if command -v unminimize >/dev/null 2>&1; then
+        log "Unminimizing the base image (restores man pages, docs and translation catalogs)"
+        # The script asks for one interactive confirmation. printf feeds it and
+        # exits cleanly under `set -o pipefail`, unlike a `yes` pipe that would
+        # die on SIGPIPE when unminimize exits first.
+        printf 'y\ny\ny\n' | unminimize >/dev/null \
+            || warn "unminimize failed; continuing with the minimized base"
+    else
+        warn "unminimize not found in the base image; assuming it is not a minimized variant"
+    fi
+fi
+
 apt-get install -y -qq --no-install-recommends \
     ca-certificates curl wget gnupg apt-transport-https \
     locales tzdata keyboard-configuration xkb-data \
@@ -119,7 +146,26 @@ for extra in ${EXTRA_LOCALES:-}; do
 done
 
 # ─────────────────────────────────────────────────────────────────────────────
-# 3. Node.js runtime (needed by the web client)
+# 3. Common Linux command-line tools
+#
+#    What a terminal user on a desktop expects to find and a bare minimized
+#    Ubuntu image lacks: editors, archivers, network diagnostics, monitoring,
+#    completion. Set INSTALL_TOOLS=0 to skip them.
+# ─────────────────────────────────────────────────────────────────────────────
+if [ "${INSTALL_TOOLS:-1}" = "1" ]; then
+    log "Installing common Linux tools"
+    apt-get install -y -qq --no-install-recommends \
+        bash-completion man-db \
+        less nano vim \
+        git jq bc \
+        tree file zip unzip rsync \
+        htop lsof strace tmux \
+        net-tools iputils-ping dnsutils netcat-openbsd \
+        lsb-release
+fi
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 4. Node.js runtime (needed by the web client)
 #
 #    Ubuntu 24.04 ships Node 18, which reached end of life in April 2025, so
 #    take the current LTS from NodeSource instead. Set INSTALL_NODE=0 if this
@@ -153,7 +199,7 @@ if [ "${INSTALL_NODE:-1}" = "1" ]; then
 fi
 
 # ─────────────────────────────────────────────────────────────────────────────
-# 4. X server plumbing
+# 5. X server plumbing
 #
 #    NOTE: this is the part the web client silently depends on. It shells out
 #    to xclip, wmctrl, xrandr and cvt, so a container missing these renders the
@@ -190,7 +236,7 @@ check_bin dbus-launch dbus-x11
 log "X tooling verified (xrandr, cvt, xclip, wmctrl, xauth, xdpyinfo, dbus-launch)"
 
 # ─────────────────────────────────────────────────────────────────────────────
-# 5. TigerVNC + websockify
+# 6. TigerVNC + websockify
 # ─────────────────────────────────────────────────────────────────────────────
 log "Installing TigerVNC and websockify"
 apt-get install -y -qq --no-install-recommends \
@@ -204,7 +250,7 @@ check_bin websockify websockify
 log "Xtigervnc: $(Xtigervnc -version 2>&1 | head -1)"
 
 # ─────────────────────────────────────────────────────────────────────────────
-# 6. XFCE desktop
+# 7. XFCE desktop
 # ─────────────────────────────────────────────────────────────────────────────
 log "Installing XFCE (this is the bulk of the image)"
 apt-get install -y -qq \
@@ -248,11 +294,11 @@ log "XFCE verified"
 if ! ls /usr/share/locale/*/LC_MESSAGES/*.mo >/dev/null 2>&1; then
     warn "No translation catalogs (.mo) were unpacked under /usr/share/locale."
     warn "The base image likely dpkg-path-excludes them; the desktop will stay in English regardless of LANG/LC_ALL."
-    warn "Fix: add 'path-include=/usr/share/locale/*/LC_MESSAGES/*.mo' after the exclude in the dpkg config and rebuild."
+    warn "Fix: rebuild with UNMINIMIZE=1 (the default) so the unminimize step restores them."
 fi
 
 # ─────────────────────────────────────────────────────────────────────────────
-# 7. Desktop applications
+# 8. Desktop applications
 #
 #    Chrome, Firefox and VS Code are installed by default: they are what the
 #    dock exists for, and the dock hides an icon automatically when the binary
@@ -313,7 +359,7 @@ if [ "${INSTALL_DOCS:-0}" = "1" ]; then
 fi
 
 # ─────────────────────────────────────────────────────────────────────────────
-# 8. Unprivileged runtime user
+# 9. Unprivileged runtime user
 #
 #    The desktop runs as this user, not root. Xtigervnc and XFCE both want a
 #    writable $HOME for .Xauthority, ~/.vnc and D-Bus sockets, and running as
@@ -382,7 +428,7 @@ chmod 0440 "/etc/sudoers.d/${DESKTOP_USER}"
 log "Runtime user: $DESKTOP_USER (uid $DESKTOP_UID), home $DESKTOP_HOME, passwordless sudo"
 
 # ─────────────────────────────────────────────────────────────────────────────
-# 9. X startup script
+# 10. X startup script
 #
 #    start-vnc runs this as an ordinary child process, so this script's own
 #    lifetime IS the session's lifetime. It ends by exec'ing the desktop,
@@ -458,7 +504,7 @@ SESSION
 chmod +x /usr/local/bin/xfce-vnc-session
 
 # ─────────────────────────────────────────────────────────────────────────────
-# 10. Xtigervnc launcher
+# 11. Xtigervnc launcher
 #
 #    -SecurityTypes None is deliberate: the browser client has no VNC password
 #    field and sends an empty credential. If you enable VNC auth you must also
@@ -521,63 +567,9 @@ if [ -n "$SESSION_LOCALE" ] && [ "$SESSION_LOCALE" != "C" ] && [ "$SESSION_LOCAL
     fi
 fi
 
-# Restore translation catalogs stripped by the base image.
-#
-# Some slimmed base images dpkg-path-exclude every .mo under /usr/share/locale
-# ("Drop all translations"). Packages still install "successfully" and dpkg -L
-# still lists the catalogs, but none reach the disk, so the desktop stays in
-# English no matter what LANG/LC_ALL say -- only apps bundling their own
-# translations (Chrome) respond to a language change. If the session language's
-# catalogs are missing and a dpkg exclude is responsible, re-include them (a
-# 99- file sorts after the base image's config, and dpkg path filters are
-# last-match-wins), reinstall the packages that own them, and add the Ubuntu
-# language pack for the GTK/glib/gvfs core strings -- those install under
-# /usr/share/locale-langpack, a path the exclude never touches.
-#
-# This runs before the X server starts and costs ~1 minute on a stripped image
-# (apt update + ~50 reinstall); it skips instantly on images that ship their
-# translations, and the restored files persist in the container's writable
-# layer across restarts. RESTORE_LOCALES=0 opts out.
-restore_session_translations() {
-    local lang pkgs
-    lang="${SESSION_LOCALE%%_*}"
-    # "en" needs no restore: gettext falls back to the msgids themselves,
-    # which are English, so a stripped image is indistinguishable from a
-    # translated one (en_* locales all reduce to the same language code).
-    case "$lang" in
-        ""|C|POSIX|c|en) return 0 ;;
-    esac
-    if ls /usr/share/locale/*/LC_MESSAGES/*.mo >/dev/null 2>&1; then
-        return 0
-    fi
-    if ! grep -qs "^path-exclude=/usr/share/locale" \
-            /etc/dpkg/dpkg.cfg /etc/dpkg/dpkg.cfg.d/* 2>/dev/null; then
-        return 0
-    fi
-    echo "Translation catalogs are stripped by a dpkg path-exclude; restoring language '$lang'"
-    printf 'path-include=/usr/share/locale/%s/LC_MESSAGES/*.mo\n' "$lang" \
-        | $SUDO tee /etc/dpkg/dpkg.cfg.d/99-restore-translations >/dev/null \
-        || { echo "warning: cannot write dpkg config; the desktop will stay in English" >&2; return 0; }
-    if ! $SUDO apt-get update -qq >/dev/null 2>&1; then
-        echo "warning: apt-get update failed; the desktop will stay in English" >&2
-        return 0
-    fi
-    pkgs="$(dpkg -S "/usr/share/locale/${lang}/LC_MESSAGES/*.mo" 2>/dev/null | cut -d: -f1 | sort -u)"
-    if [ -n "$pkgs" ]; then
-        # Deliberate word splitting: $pkgs is a newline-separated package list.
-        $SUDO apt-get install --reinstall -y -qq $pkgs >/dev/null 2>&1 \
-            || echo "warning: reinstalling translation packages failed; the desktop will stay in English" >&2
-    fi
-    $SUDO apt-get install -y -qq "language-pack-gnome-${lang}-base" >/dev/null 2>&1 || true
-    if ls "/usr/share/locale/${lang}/LC_MESSAGES/"*.mo >/dev/null 2>&1; then
-        echo "Translations for '$lang' restored"
-    else
-        echo "warning: no '$lang' translation catalogs after restore; the desktop will stay in English" >&2
-    fi
-}
-if [ "${RESTORE_LOCALES:-1}" = "1" ]; then
-    restore_session_translations
-fi
+# Translation catalogs are baked in at build time by the unminimize step in
+# section 2, which reinstalls everything the minimized base image's dpkg
+# path-excludes dropped. Nothing to fix up at startup.
 
 # X11 socket dir. Created at build time with the sticky bit; recreate it here
 # in case /tmp was mounted fresh.
@@ -663,12 +655,12 @@ STARTVNC
 chmod +x /usr/local/bin/start-vnc
 
 # ─────────────────────────────────────────────────────────────────────────────
-# 11. Wrap Xtigervnc's own launcher so `startvnc` behaves predictably
+# 12. Wrap Xtigervnc's own launcher so `startvnc` behaves predictably
 # ─────────────────────────────────────────────────────────────────────────────
 ln -sf /usr/local/bin/start-vnc /usr/local/bin/start-desktop
 
 # ─────────────────────────────────────────────────────────────────────────────
-# 12. Cleanup
+# 13. Cleanup
 # ─────────────────────────────────────────────────────────────────────────────
 log "Cleaning apt cache"
 apt-get clean
