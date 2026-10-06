@@ -15,7 +15,7 @@
 #                         deployment; it defaults to on)
 #    NODE_MAJOR=22        NodeSource major version to install
 #    INSTALL_BROWSERS=0   Google Chrome (the dock's "Chrome" icon)
-#    INSTALL_FIREFOX=0    Firefox
+#    INSTALL_FIREFOX=1    Firefox (opt-in; off by default)
 #    INSTALL_VSCODE=0     Visual Studio Code (the dock's "VS Code" icon)
 #    INSTALL_DOCS=0       LibreOffice
 #    UNMINIMIZE=0         skip running the base image's stock `unminimize`,
@@ -300,10 +300,11 @@ fi
 # ─────────────────────────────────────────────────────────────────────────────
 # 8. Desktop applications
 #
-#    Chrome, Firefox and VS Code are installed by default: they are what the
-#    dock exists for, and the dock hides an icon automatically when the binary
-#    is missing, so a build without them ships a half-empty dock. Set the
-#    matching INSTALL_* to 0 to slim the image down again.
+#    Chrome and VS Code are installed by default: they are what the dock
+#    exists for, and the dock hides an icon automatically when the binary is
+#    missing, so a build without them ships a half-empty dock. Firefox is
+#    opt-in via INSTALL_FIREFOX=1. Set the matching INSTALL_* to 0 to slim the
+#    image down again.
 # ─────────────────────────────────────────────────────────────────────────────
 # Synaptic: the GTK package manager. Recommends are kept so the "run in
 # terminal" actions (which shell out to xterm) work as a user expects.
@@ -352,7 +353,7 @@ if [ "${INSTALL_BROWSERS:-1}" = "1" ]; then
     check_bin google-chrome google-chrome-stable
 fi
 
-if [ "${INSTALL_FIREFOX:-1}" = "1" ]; then
+if [ "${INSTALL_FIREFOX:-0}" = "1" ]; then
     # Ubuntu's `firefox` package is a snap transitional wrapper, which does not
     # work in a container. Use the Mozilla APT repo instead.
     log "Installing Firefox (Mozilla APT repo)"
@@ -432,6 +433,23 @@ DESKTOP_HOME="$(getent passwd "$DESKTOP_USER" | cut -d: -f6)"
 # ~/Desktop and ~/Downloads are where the web client's file transfer reads and
 # writes, so they must exist and be owned by the runtime user.
 mkdir -p "$DESKTOP_HOME/Desktop" "$DESKTOP_HOME/Downloads" "$DESKTOP_HOME/.vnc"
+
+# Desktop shortcuts. They reuse the .desktop files the applications menu uses,
+# so synaptic's goes through synaptic-root and needs no polkit either. The
+# 0755 mode marks them executable, which XFCE's desktop icons require before
+# they launch without an "untrusted application" prompt.
+log "Adding desktop shortcuts (Chrome, VS Code, Synaptic)"
+for shortcut_src in \
+    /usr/share/applications/google-chrome.desktop \
+    /usr/share/applications/code.desktop \
+    /usr/local/share/applications/synaptic.desktop; do
+    if [ -f "$shortcut_src" ]; then
+        install -m 0755 "$shortcut_src" "$DESKTOP_HOME/Desktop/$(basename "$shortcut_src")"
+    else
+        warn "Desktop shortcut source $shortcut_src not found; skipping"
+    fi
+done
+
 chown -R "${DESKTOP_UID}:${DESKTOP_GID}" "$DESKTOP_HOME"
 
 # X11 unix sockets. X creates /tmp/.X11-unix itself but needs the directory to

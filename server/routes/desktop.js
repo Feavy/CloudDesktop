@@ -65,19 +65,20 @@ const storage = multer.diskStorage({
 });
 const upload = multer({ storage, limits: { fileSize: 100 * 1024 * 1024 } });
 
-// Allowlisted apps for launch endpoint
+// Allowlisted apps for launch endpoint. Order mirrors the dock.
 const ALLOWED_APPS = {
+  filemanager: { cmd: 'thunar', args: [] },
   terminal: { cmd: 'xfce4-terminal', args: [] },
-  firefox: { cmd: 'firefox', args: ['--no-remote'] },
+  // synaptic-root (written by install.sh) launches Synaptic as root on the
+  // session display; synaptic itself must not run unprivileged.
+  synaptic: { cmd: 'synaptic-root', args: [] },
   chrome: { cmd: 'google-chrome', args: ['--no-sandbox', '--no-first-run'] },
   vscode: { cmd: 'code', args: ['--no-sandbox'] },
-  filemanager: { cmd: 'thunar', args: [] },
-  editor: { cmd: 'mousepad', args: [] },
 };
 
 // Only offer dock icons for apps that are actually installed in this pod.
-// A minimal image has no Chrome or Firefox, and a dead icon is worse than a
-// missing one. Resolved once at startup because the package set is static.
+// A minimal image has no Chrome, and a dead icon is worse than a missing one.
+// Resolved once at startup because the package set is static.
 const availableApps = Object.entries(ALLOWED_APPS)
   .filter(([, app]) => {
     const found = (process.env.PATH || '').split(':').some((dir) => {
