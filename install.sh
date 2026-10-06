@@ -311,6 +311,38 @@ log "Installing Synaptic package manager"
 apt-get install -y -qq synaptic
 check_bin synaptic synaptic
 
+# Synaptic's stock menu entry is `synaptic-pkexec`, i.e. pkexec, which needs a
+# polkit authentication agent to put up its dialog. No agent runs in this
+# session, and without logind polkit would not see it as an active local
+# session anyway, so launching from the applications menu silently does
+# nothing (pkexec only works from a terminal, through its built-in text
+# prompt). Route the menu entry through the passwordless sudo configured in
+# section 9 instead: DISPLAY survives sudo's env_reset, and XAUTHORITY is
+# forwarded explicitly so the root GUI lands on the user's own X server. The
+# override sits in /usr/local/share/applications, which XDG_DATA_DIRS ranks
+# ahead of /usr/share, so a synaptic package upgrade cannot revert it.
+mkdir -p /usr/local/share/applications
+cat > /usr/local/share/applications/synaptic.desktop <<'DESKTOP'
+[Desktop Entry]
+Name=Synaptic Package Manager
+GenericName=Package Manager
+Comment=Install, remove and upgrade software packages
+Exec=synaptic-root
+Icon=synaptic
+Terminal=false
+Type=Application
+Categories=PackageManager;GTK;System;Settings;
+X-Ubuntu-Gettext-Domain=synaptic
+StartupNotify=true
+StartupWMClass=synaptic
+DESKTOP
+cat > /usr/local/bin/synaptic-root <<'WRAPPER'
+#!/bin/sh
+# Launch Synaptic as root on the session's X display; written by install.sh.
+exec sudo -H DISPLAY="${DISPLAY}" XAUTHORITY="${XAUTHORITY:-$HOME/.Xauthority}" /usr/sbin/synaptic "$@"
+WRAPPER
+chmod +x /usr/local/bin/synaptic-root
+
 if [ "${INSTALL_BROWSERS:-1}" = "1" ]; then
     log "Installing Google Chrome"
     curl -fsSL -o /tmp/chrome.deb \
