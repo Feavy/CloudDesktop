@@ -61,7 +61,9 @@ ENV NODE_ENV=production \
 # 3000 = web client, 6900 = websockify
 EXPOSE 3000 6900
 
-HEALTHCHECK --interval=30s --timeout=3s --start-period=20s --retries=3 \
+# The long start period leaves room for start-vnc's startup work on a fresh
+# container (session locale generation, translation-catalog restore).
+HEALTHCHECK --interval=30s --timeout=3s --start-period=300s --retries=3 \
   CMD node -e "fetch('http://127.0.0.1:3000/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"
 
 # Unprivileged, and deliberately the same user as the desktop: the web client

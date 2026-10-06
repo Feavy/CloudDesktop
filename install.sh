@@ -21,6 +21,8 @@
 #    EXTRA_LOCALES        extra locales to bake in, space-separated, e.g.
 #                         "fr_FR.UTF-8 de_DE.UTF-8" (en_US.UTF-8 is always
 #                         generated; see also start-vnc's on-the-fly fallback)
+#    RESTORE_LOCALES=0    opt out of start-vnc reinstalling translation
+#                         catalogs stripped by the base image's dpkg excludes
 #    DISPLAY_GEOMETRY=1920x1080
 #    VNC_PORT=5900        raw RFB port
 #    VNC_WS_PORT=6900     websockify port
@@ -517,6 +519,61 @@ if [ -n "$SESSION_LOCALE" ] && [ "$SESSION_LOCALE" != "C" ] && [ "$SESSION_LOCAL
             echo "warning: could not generate locale $SESSION_LOCALE; the session will use the C locale" >&2
         fi
     fi
+fi
+
+# Restore translation catalogs stripped by the base image.
+#
+# Some slimmed base images dpkg-path-exclude every .mo under /usr/share/locale
+# ("Drop all translations"). Packages still install "successfully" and dpkg -L
+# still lists the catalogs, but none reach the disk, so the desktop stays in
+# English no matter what LANG/LC_ALL say -- only apps bundling their own
+# translations (Chrome) respond to a language change. If the session language's
+# catalogs are missing and a dpkg exclude is responsible, re-include them (a
+# 99- file sorts after the base image's config, and dpkg path filters are
+# last-match-wins), reinstall the packages that own them, and add the Ubuntu
+# language pack for the GTK/glib/gvfs core strings -- those install under
+# /usr/share/locale-langpack, a path the exclude never touches.
+#
+# This runs before the X server starts and costs ~1 minute on a stripped image
+# (apt update + ~50 reinstall); it skips instantly on images that ship their
+# translations, and the restored files persist in the container's writable
+# layer across restarts. RESTORE_LOCALES=0 opts out.
+restore_session_translations() {
+    local lang pkgs
+    lang="${SESSION_LOCALE%%_*}"
+    case "$lang" in
+        ""|C|POSIX|c) return 0 ;;
+    esac
+    if ls /usr/share/locale/*/LC_MESSAGES/*.mo >/dev/null 2>&1; then
+        return 0
+    fi
+    if ! grep -qs "^path-exclude=/usr/share/locale" \
+            /etc/dpkg/dpkg.cfg /etc/dpkg/dpkg.cfg.d/* 2>/dev/null; then
+        return 0
+    fi
+    echo "Translation catalogs are stripped by a dpkg path-exclude; restoring language '$lang'"
+    printf 'path-include=/usr/share/locale/%s/LC_MESSAGES/*.mo\n' "$lang" \
+        | $SUDO tee /etc/dpkg/dpkg.cfg.d/99-restore-translations >/dev/null \
+        || { echo "warning: cannot write dpkg config; the desktop will stay in English" >&2; return 0; }
+    if ! $SUDO apt-get update -qq >/dev/null 2>&1; then
+        echo "warning: apt-get update failed; the desktop will stay in English" >&2
+        return 0
+    fi
+    pkgs="$(dpkg -S "/usr/share/locale/${lang}/LC_MESSAGES/*.mo" 2>/dev/null | cut -d: -f1 | sort -u)"
+    if [ -n "$pkgs" ]; then
+        # Deliberate word splitting: $pkgs is a newline-separated package list.
+        $SUDO apt-get install --reinstall -y -qq $pkgs >/dev/null 2>&1 \
+            || echo "warning: reinstalling translation packages failed; the desktop will stay in English" >&2
+    fi
+    $SUDO apt-get install -y -qq "language-pack-gnome-${lang}-base" >/dev/null 2>&1 || true
+    if ls "/usr/share/locale/${lang}/LC_MESSAGES/"*.mo >/dev/null 2>&1; then
+        echo "Translations for '$lang' restored"
+    else
+        echo "warning: no '$lang' translation catalogs after restore; the desktop will stay in English" >&2
+    fi
+}
+if [ "${RESTORE_LOCALES:-1}" = "1" ]; then
+    restore_session_translations
 fi
 
 # X11 socket dir. Created at build time with the sticky bit; recreate it here

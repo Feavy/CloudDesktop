@@ -129,6 +129,7 @@ Extras:
 |---|---|---|
 | `INSTALL_NODE` | `1` | Install Node.js from NodeSource (Ubuntu's own is 18, EOL). `Dockerfile.desktop` sets this to `0` |
 | `NODE_MAJOR` | `22` | NodeSource major version |
+| `RESTORE_LOCALES` | `1` | At startup, reinstall translation catalogs when the base image dpkg-strips them (desktop would otherwise stay in English); set `0` to opt out |
 
 Installed-by-default desktop apps (set `0` to slim the image down):
 

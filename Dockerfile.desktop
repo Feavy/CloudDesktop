@@ -37,7 +37,10 @@ EXPOSE 6900
 
 # Probes the websockify port rather than just the binary's existence, so a
 # container that has crashed X but is still running reports unhealthy.
-HEALTHCHECK --interval=30s --timeout=3s --start-period=20s --retries=3 \
+# The long start period leaves room for start-vnc's startup work: generating
+# the session locale and, on base images that dpkg-strip translation catalogs,
+# an apt reinstall that can take a minute or two.
+HEALTHCHECK --interval=30s --timeout=3s --start-period=300s --retries=3 \
   CMD bash -c 'exec 3<>/dev/tcp/127.0.0.1/${VNC_WS_PORT:-6900}' || exit 1
 
 # Unprivileged. install.sh reuses the image's stock `ubuntu` user by default and
