@@ -352,62 +352,72 @@ XCONF_DIR="${XDG_CONF_DIR}/xfconf/xfce-perchannel-xml"
 mkdir -p "$XCONF_DIR"
 
 # Panel: one full-width bar snapped to the bottom edge, Windows-taskbar style.
-# The position string is "p=<snap>;x=<x>;y=<y>" (xfce4-panel >= 4.16): snap 12
-# is SNAP_POSITION_S, the bottom edge. Plugins left to right: Whisker start
-# menu, a gap, the window buttons, a stretching gap, tray, clock and a
-# show-desktop sliver on the far right.
+# The xfconf layout must match what xfce4-panel itself reads and writes:
+#   /panels            array of panel ids
+#   /panels/panel-1/.. panel properties (position string "p=<snap>;x=<x>;y=<y>",
+#                      snap 12 = SNAP_POSITION_S, the bottom edge, xfce4-panel
+#                      >= 4.16)
+#   /plugins/plugin-N/ plugin type and per-plugin settings
+# Getting any of these paths wrong does not fail loudly: the panel finds no
+# plugins, shrinks to a tiny floating window at the top-left and silently
+# resets the channel (verified the hard way), so the nesting below is exactly
+# what `xfce4-panel --save` produces on 4.18.
 log "Writing the bottom taskbar panel defaults"
 cat > "${XCONF_DIR}/xfce4-panel.xml" <<PANEL
 <?xml version="1.0" encoding="UTF-8"?>
 <channel name="xfce4-panel" version="1.0">
   <property name="configver" type="int" value="2"/>
-  <property name="panels" type="uint" value="1"/>
-  <property name="panel-1" type="empty">
-    <property name="mode" type="uint" value="0"/>
-    <property name="position" type="string" value="p=12;x=0;y=0"/>
-    <property name="size" type="uint" value="40"/>
-    <property name="length" type="double" value="100.0"/>
-    <property name="autohide-behavior" type="uint" value="0"/>
-    <property name="enable-struts" type="bool" value="true"/>
-    <property name="plugin-ids" type="array">
-      <value type="int" value="1"/>
-      <value type="int" value="2"/>
-      <value type="int" value="3"/>
-      <value type="int" value="4"/>
-      <value type="int" value="5"/>
-      <value type="int" value="6"/>
-      <value type="int" value="7"/>
+  <property name="panels" type="array">
+    <value type="int" value="1"/>
+    <property name="panel-1" type="empty">
+      <property name="mode" type="uint" value="0"/>
+      <property name="position" type="string" value="p=12;x=0;y=0"/>
+      <property name="size" type="uint" value="40"/>
+      <property name="length" type="double" value="100.0"/>
+      <property name="autohide-behavior" type="uint" value="0"/>
+      <property name="enable-struts" type="bool" value="true"/>
+      <property name="plugin-ids" type="array">
+        <value type="int" value="1"/>
+        <value type="int" value="2"/>
+        <value type="int" value="3"/>
+        <value type="int" value="4"/>
+        <value type="int" value="5"/>
+        <value type="int" value="6"/>
+        <value type="int" value="7"/>
+      </property>
     </property>
   </property>
-  <property name="plugin-1" type="string" value="whiskermenu">
-    <!-- Whisker >= 2.8 keeps its settings in the panel's xfconf channel,
-         under this plugin's property base, so the button icon rides along
-         here. A grid icon reads as the Windows start button. -->
-    <property name="button-icon" type="string" value="view-grid"/>
+  <property name="plugins" type="empty">
+    <property name="plugin-1" type="string" value="whiskermenu">
+      <!-- Whisker >= 2.8 keeps its settings in the panel's xfconf channel,
+           under this plugin's property base, so the button icon rides along
+           here. A grid icon reads as the Windows start button. -->
+      <property name="button-icon" type="string" value="view-grid"/>
+    </property>
+    <property name="plugin-2" type="string" value="separator">
+      <property name="style" type="uint" value="0"/>
+      <property name="expand" type="bool" value="false"/>
+    </property>
+    <property name="plugin-3" type="string" value="tasklist">
+      <!-- One button per window, like Windows: no grouping, flat buttons with
+           labels, and windows from every workspace listed so a workspace
+           switch can never orphan the taskbar. -->
+      <property name="grouping" type="bool" value="false"/>
+      <property name="flat-buttons" type="bool" value="true"/>
+      <property name="show-labels" type="bool" value="true"/>
+      <property name="include-all-workspaces" type="bool" value="true"/>
+    </property>
+    <property name="plugin-4" type="string" value="separator">
+      <property name="style" type="uint" value="0"/>
+      <property name="expand" type="bool" value="true"/>
+    </property>
+    <property name="plugin-5" type="string" value="systray"/>
+    <property name="plugin-6" type="string" value="clock">
+      <!-- 2 = CLOCK_PLUGIN_MODE_DIGITAL: time and date, like Windows. -->
+      <property name="mode" type="uint" value="2"/>
+    </property>
+    <property name="plugin-7" type="string" value="showdesktop"/>
   </property>
-  <property name="plugin-2" type="string" value="separator">
-    <property name="style" type="uint" value="0"/>
-    <property name="expand" type="bool" value="false"/>
-  </property>
-  <property name="plugin-3" type="string" value="tasklist">
-    <!-- One button per window, like Windows: no grouping, flat buttons with
-         labels, and windows from every workspace listed so a workspace switch
-         can never orphan the taskbar. -->
-    <property name="grouping" type="bool" value="false"/>
-    <property name="flat-buttons" type="bool" value="true"/>
-    <property name="show-labels" type="bool" value="true"/>
-    <property name="include-all-workspaces" type="bool" value="true"/>
-  </property>
-  <property name="plugin-4" type="string" value="separator">
-    <property name="style" type="uint" value="0"/>
-    <property name="expand" type="bool" value="true"/>
-  </property>
-  <property name="plugin-5" type="string" value="systray"/>
-  <property name="plugin-6" type="string" value="clock">
-    <!-- 2 = CLOCK_PLUGIN_MODE_DIGITAL: time and date, like Windows. -->
-    <property name="mode" type="uint" value="2"/>
-  </property>
-  <property name="plugin-7" type="string" value="showdesktop"/>
 </channel>
 PANEL
 
