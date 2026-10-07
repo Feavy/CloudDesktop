@@ -436,12 +436,19 @@ mkdir -p "$DESKTOP_HOME/Desktop" "$DESKTOP_HOME/Downloads" "$DESKTOP_HOME/.vnc"
 
 # Desktop shortcuts. They reuse the .desktop files the applications menu uses,
 # so synaptic's goes through synaptic-root and needs no polkit either. The
-# 0755 mode marks them executable, which XFCE's desktop icons require before
-# they launch without an "untrusted application" prompt.
+# 0755 mode is the executable half of XFCE 4.18's launcher-trust check; the
+# other half (a GVfs checksum attribute) is seeded at session start by
+# /usr/local/bin/trust-desktop-launchers, see section 10.
+#
+# VS Code's deb ships its launcher as com.microsoft.VSCode.desktop; accept the
+# older code.desktop name too so a pinned repo cannot silently lose the
+# shortcut.
+VSCODE_DESKTOP="/usr/share/applications/com.microsoft.VSCode.desktop"
+[ -f "$VSCODE_DESKTOP" ] || VSCODE_DESKTOP="/usr/share/applications/code.desktop"
 log "Adding desktop shortcuts (Chrome, VS Code, Synaptic)"
 for shortcut_src in \
     /usr/share/applications/google-chrome.desktop \
-    /usr/share/applications/code.desktop \
+    "$VSCODE_DESKTOP" \
     /usr/local/share/applications/synaptic.desktop; do
     if [ -f "$shortcut_src" ]; then
         install -m 0755 "$shortcut_src" "$DESKTOP_HOME/Desktop/$(basename "$shortcut_src")"
@@ -449,6 +456,34 @@ for shortcut_src in \
         warn "Desktop shortcut source $shortcut_src not found; skipping"
     fi
 done
+
+# Launcher-trust seeding. XFCE 4.18 shows the "Untrusted application launcher"
+# prompt unless a .desktop file is executable AND GVfs metadata carries the
+# sha256 of its contents (attribute metadata::xfce-exe-checksum). The
+# executable bit is baked in above, but the checksum cannot be: GVfs journals
+# its metadata per filesystem, so it must be written on the real $HOME after
+# the container starts. This helper is called from xfce-vnc-session with the
+# session D-Bus up, which is what activates gvfsd-metadata for the write.
+# Recomputing every start also re-trusts launchers the user adds later, and
+# unchanged files are skipped so the journal does not grow.
+cat > /usr/local/bin/trust-desktop-launchers <<'TRUST'
+#!/bin/sh
+# Seed XFCE 4.18 launcher trust for everything on ~/Desktop; run from
+# xfce-vnc-session with the session D-Bus available. Written by install.sh.
+[ -d "$HOME/Desktop" ] || exit 0
+for f in "$HOME"/Desktop/*.desktop; do
+    [ -f "$f" ] || continue
+    chmod u+x "$f" 2>/dev/null || true
+    sum="$(sha256sum "$f" 2>/dev/null)" || continue
+    sum="${sum%% *}"
+    cur="$(gio info -a metadata::xfce-exe-checksum "$f" 2>/dev/null \
+        | sed -n 's/^ *metadata::xfce-exe-checksum: *//p')"
+    [ "$cur" = "$sum" ] \
+        || gio set "$f" metadata::xfce-exe-checksum "$sum" 2>>/tmp/gvfs-trust.log \
+        || true
+done
+TRUST
+chmod +x /usr/local/bin/trust-desktop-launchers
 
 chown -R "${DESKTOP_UID}:${DESKTOP_GID}" "$DESKTOP_HOME"
 
@@ -523,6 +558,13 @@ export XDG_SESSION_TYPE=x11
 export XDG_CONFIG_DIRS=/etc/xdg
 export XDG_DATA_DIRS=/usr/local/share:/usr/share
 export XDG_CURRENT_DESKTOP=XFCE
+
+# XFCE 4.18 only trusts a desktop launcher when GVfs metadata carries the
+# checksum of the .desktop file's contents; seed it for everything currently
+# on ~/Desktop (see trust-desktop-launchers for why this cannot happen at
+# build time). Needs the D-Bus session set up above; failures are logged to
+# /tmp/gvfs-trust.log and must never keep the desktop from starting.
+/usr/local/bin/trust-desktop-launchers || true
 
 # Bridge the X clipboard to the VNC clipboard in both directions.
 #   vncconfig  = VNC side  <-> X selections
