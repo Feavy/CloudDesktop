@@ -262,7 +262,6 @@ apt-get install -y -qq \
     xfce4-screenshooter \
     xcape \
     adwaita-icon-theme \
-    xfce4-whiskermenu-plugin \
     dbus-user-session
 
 log "Installing fonts (without these the desktop renders with tofu boxes)"
@@ -284,11 +283,6 @@ check_bin thunar         thunar
 check_bin mousepad       mousepad
 check_bin autocutsel     autocutsel
 check_bin xcape          xcape
-
-# Whisker is a panel plugin: no binary lands on $PATH, so check for the
-# loadable module instead (the path carries the multiarch triplet).
-ls /usr/lib/*/xfce4/panel/plugins/libwhiskermenu.so >/dev/null 2>&1 \
-    || die "whiskermenu panel plugin missing after install. It should come from 'xfce4-whiskermenu-plugin'."
 log "XFCE verified"
 
 # Slimmed base images sometimes dpkg-path-exclude every .mo under
@@ -304,7 +298,7 @@ if ! ls /usr/share/locale/*/LC_MESSAGES/*.mo >/dev/null 2>&1; then
 fi
 
 # ─────────────────────────────────────────────────────────────────────────────
-# 8. Look and feel: Orchis theme + a Windows-style bottom taskbar
+# 8. Look and feel: the Orchis theme
 #
 #    The stock XFCE look is functional but spartan. Two things change it:
 #
@@ -314,11 +308,11 @@ fi
 #      /usr/share/themes/Orchis-Compact{,-Light,-Dark}. Skipped when the
 #      theme is already present, because Dockerfile.full re-runs this script
 #      on top of the desktop image and the compile is the expensive step.
-#    - System-wide xfconf defaults that move the panel to the bottom edge and
-#      swap the Applications menu for Whisker Menu, whose search field and
-#      favorites read like the Windows start menu. xfconfd takes these files
-#      as a channel's defaults for any user without their own override, so a
-#      fresh home picks the layout up with no per-user setup.
+#    - System-wide xfconf defaults that apply the theme (GTK, xfwm4) and bake
+#      in the matching Orchis wallpaper. The panel keeps XFCE's stock default
+#      layout. xfconfd takes these files as a channel's defaults for any user
+#      without their own override, so a fresh home picks the look up with no
+#      per-user setup.
 # ─────────────────────────────────────────────────────────────────────────────
 THEME_NAME="Orchis-Compact"
 
@@ -350,76 +344,6 @@ log "Orchis theme verified (${THEME_NAME})"
 XDG_CONF_DIR=/etc/xdg/xfce4
 XCONF_DIR="${XDG_CONF_DIR}/xfconf/xfce-perchannel-xml"
 mkdir -p "$XCONF_DIR"
-
-# Panel: one full-width bar snapped to the bottom edge, Windows-taskbar style.
-# The xfconf layout must match what xfce4-panel itself reads and writes:
-#   /panels            array of panel ids
-#   /panels/panel-1/.. panel properties (position string "p=<snap>;x=<x>;y=<y>",
-#                      snap 12 = SNAP_POSITION_S, the bottom edge, xfce4-panel
-#                      >= 4.16)
-#   /plugins/plugin-N/ plugin type and per-plugin settings
-# Getting any of these paths wrong does not fail loudly: the panel finds no
-# plugins, shrinks to a tiny floating window at the top-left and silently
-# resets the channel (verified the hard way), so the nesting below is exactly
-# what `xfce4-panel --save` produces on 4.18.
-log "Writing the bottom taskbar panel defaults"
-cat > "${XCONF_DIR}/xfce4-panel.xml" <<PANEL
-<?xml version="1.0" encoding="UTF-8"?>
-<channel name="xfce4-panel" version="1.0">
-  <property name="configver" type="int" value="2"/>
-  <property name="panels" type="array">
-    <value type="int" value="1"/>
-    <property name="panel-1" type="empty">
-      <property name="mode" type="uint" value="0"/>
-      <property name="position" type="string" value="p=12;x=0;y=0"/>
-      <property name="size" type="uint" value="40"/>
-      <property name="length" type="double" value="100.0"/>
-      <property name="autohide-behavior" type="uint" value="0"/>
-      <property name="enable-struts" type="bool" value="true"/>
-      <property name="plugin-ids" type="array">
-        <value type="int" value="1"/>
-        <value type="int" value="2"/>
-        <value type="int" value="3"/>
-        <value type="int" value="4"/>
-        <value type="int" value="5"/>
-        <value type="int" value="6"/>
-        <value type="int" value="7"/>
-      </property>
-    </property>
-  </property>
-  <property name="plugins" type="empty">
-    <property name="plugin-1" type="string" value="whiskermenu">
-      <!-- Whisker >= 2.8 keeps its settings in the panel's xfconf channel,
-           under this plugin's property base, so the button icon rides along
-           here. A grid icon reads as the Windows start button. -->
-      <property name="button-icon" type="string" value="view-grid"/>
-    </property>
-    <property name="plugin-2" type="string" value="separator">
-      <property name="style" type="uint" value="0"/>
-      <property name="expand" type="bool" value="false"/>
-    </property>
-    <property name="plugin-3" type="string" value="tasklist">
-      <!-- One button per window, like Windows: no grouping, flat buttons with
-           labels, and windows from every workspace listed so a workspace
-           switch can never orphan the taskbar. -->
-      <property name="grouping" type="bool" value="false"/>
-      <property name="flat-buttons" type="bool" value="true"/>
-      <property name="show-labels" type="bool" value="true"/>
-      <property name="include-all-workspaces" type="bool" value="true"/>
-    </property>
-    <property name="plugin-4" type="string" value="separator">
-      <property name="style" type="uint" value="0"/>
-      <property name="expand" type="bool" value="true"/>
-    </property>
-    <property name="plugin-5" type="string" value="systray"/>
-    <property name="plugin-6" type="string" value="clock">
-      <!-- 2 = CLOCK_PLUGIN_MODE_DIGITAL: time and date, like Windows. -->
-      <property name="mode" type="uint" value="2"/>
-    </property>
-    <property name="plugin-7" type="string" value="showdesktop"/>
-  </property>
-</channel>
-PANEL
 
 # Application theme. The stock xsettings defaults are kept and only the theme
 # entries change; xfsettingsd falls back to its built-in defaults for anything
@@ -511,14 +435,17 @@ cat > "${XCONF_DIR}/xfce4-desktop.xml" <<DESKTOP
 </channel>
 DESKTOP
 
-# The bare-Super bridge in xfce-vnc-session turns Super into Alt+F1, and the
-# stock default binds Alt+F1 to the Applications menu popup -- which the panel
-# above no longer contains. Repoint the stock default at Whisker so the
-# Windows-key behavior survives the menu swap.
+# If an older layer of this image shipped the custom bottom-taskbar panel
+# config, drop it: with no xfce4-panel.xml at all the panel falls back to
+# XFCE's stock default layout (top bar, Applications menu).
+rm -f "${XCONF_DIR}/xfce4-panel.xml"
+# Undo the Whisker rebinding the same older layers may have baked into the
+# stock keyboard defaults, so Alt+F1 (and the bare-Super bridge) pops the
+# Applications menu the stock panel actually contains.
 KBD_DEFAULTS="${XCONF_DIR}/xfce4-keyboard-shortcuts.xml"
-if [ -f "$KBD_DEFAULTS" ] && grep -q 'xfce4-popup-applicationsmenu' "$KBD_DEFAULTS"; then
-    log "Rebinding Alt+F1 to the Whisker menu"
-    sed -i 's/value="xfce4-popup-applicationsmenu"/value="xfce4-popup-whiskermenu"/' "$KBD_DEFAULTS"
+if [ -f "$KBD_DEFAULTS" ] && grep -q 'xfce4-popup-whiskermenu' "$KBD_DEFAULTS"; then
+    log "Restoring Alt+F1 to the Applications menu"
+    sed -i 's/value="xfce4-popup-whiskermenu"/value="xfce4-popup-applicationsmenu"/' "$KBD_DEFAULTS"
 fi
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -755,15 +682,14 @@ export XDG_CURRENT_DESKTOP=XFCE
 vncconfig -nowin >/dev/null 2>&1 &
 autocutsel -fork -selection CLIPBOARD >/dev/null 2>&1 &
 
-# A bare Super (Windows) key press must open the Whisker start menu, but
+# A bare Super (Windows) key press must open the Applications menu, but
 # XFCE's shortcut engine cannot grab a bare modifier: the key events arrive
 # at X (from a physical keyboard or the on-screen sticky Win key alike) and
 # are ignored no matter what is bound in xfconf -- verified live, a
 # successfully-set /commands/custom/Super_L binding does nothing. xcape is
 # the standard bridge: a Super press+release with no other key in between
-# becomes Alt+F1, which the session keyboard defaults bind to
-# xfce4-popup-whiskermenu (repointed from the Applications menu popup by the
-# look-and-feel section above). Held-Super combos are unaffected; xcape
+# becomes Alt+F1, which the stock session already binds to
+# xfce4-popup-applicationsmenu. Held-Super combos are unaffected; xcape
 # steps aside whenever a second key is pressed first. stderr is kept in a
 # file rather than discarded because this exact step failed silently once
 # already; /tmp is per-pod, so the log never grows across restarts.
