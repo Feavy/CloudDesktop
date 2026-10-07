@@ -309,10 +309,10 @@ fi
 #      theme is already present, because Dockerfile.full re-runs this script
 #      on top of the desktop image and the compile is the expensive step.
 #    - System-wide xfconf defaults that apply the theme (GTK, xfwm4) and bake
-#      in the matching Orchis wallpaper. The panel keeps XFCE's stock default
-#      layout. xfconfd takes these files as a channel's defaults for any user
-#      without their own override, so a fresh home picks the look up with no
-#      per-user setup.
+#      in the matching Orchis wallpaper, plus a floating rounded panel with
+#      XFCE's stock plugin set. xfconfd takes these files as a channel's
+#      defaults for any user without their own override, so a fresh home picks
+#      the look up with no per-user setup.
 # ─────────────────────────────────────────────────────────────────────────────
 THEME_NAME="Orchis-Compact"
 
@@ -340,6 +340,24 @@ fi
 [ -d "/usr/share/themes/${THEME_NAME}" ] || die "${THEME_NAME} theme not found after install"
 [ -f /usr/share/backgrounds/orchis-1080p.jpg ] || warn "Orchis wallpaper missing; the default backdrop will be empty"
 log "Orchis theme verified (${THEME_NAME})"
+
+# Orchis styles the XFCE panel as a flat, edge-to-edge bar. Round its corners
+# so the floating panel (see the xfce4-panel defaults below) reads as the
+# rounded Orchis taskbar; the bar's colors stay the theme's own. Rounded
+# corners need a compositor for the transparent notches, which xfwm4 provides
+# by default. Idempotent because Dockerfile.full re-runs this script on top of
+# a desktop image whose themes already carry the block.
+log "Rounding the Orchis panel corners"
+for css in /usr/share/themes/Orchis-*/gtk-3.0/gtk.css; do
+    [ -f "$css" ] || continue
+    grep -q "Orchis floating panel" "$css" || cat >> "$css" <<CSS
+
+/* Orchis floating panel */
+.xfce4-panel.background {
+  border-radius: 12px;
+}
+CSS
+done
 
 XDG_CONF_DIR=/etc/xdg/xfce4
 XCONF_DIR="${XDG_CONF_DIR}/xfconf/xfce-perchannel-xml"
@@ -435,13 +453,88 @@ cat > "${XCONF_DIR}/xfce4-desktop.xml" <<DESKTOP
 </channel>
 DESKTOP
 
-# If an older layer of this image shipped the custom bottom-taskbar panel
-# config, drop it: with no xfce4-panel.xml at all the panel falls back to
-# XFCE's stock default layout (top bar, Applications menu).
-rm -f "${XCONF_DIR}/xfce4-panel.xml"
-# Undo the Whisker rebinding the same older layers may have baked into the
-# stock keyboard defaults, so Alt+F1 (and the bare-Super bridge) pops the
-# Applications menu the stock panel actually contains.
+# Panel: XFCE's stock plugin set (Applications menu, task list, tray, clock,
+# actions) laid out as a floating rounded bar at the top -- the Orchis look.
+# The geometry rides on the panel's own floating mode: "p=0" (SNAP_POSITION_
+# NONE) takes a base POINT, and the panel centers its window on it, so
+# x=<screen width>/2, y=<half panel + gap> puts a ~8px gap above the bar and
+# length 98% leaves gaps at the sides. x is clamped to the screen, so the
+# 1920 default stays sane if a build overrides DISPLAY_GEOMETRY; the session
+# script also re-centers the bar on the live geometry. The plugin list is
+# deliberately the panel's own default: anything the image does not ship is
+# dropped by the panel itself at startup with a log line, never a failure.
+# The xfconf layout must match what xfce4-panel itself reads and writes --
+# /panels/panel-1 for the window, /plugins/plugin-N for the plugins -- or the
+# panel silently resets the channel (verified the hard way).
+log "Writing the floating panel defaults"
+cat > "${XCONF_DIR}/xfce4-panel.xml" <<PANEL
+<?xml version="1.0" encoding="UTF-8"?>
+<channel name="xfce4-panel" version="1.0">
+  <property name="configver" type="int" value="2"/>
+  <property name="panels" type="array">
+    <value type="int" value="1"/>
+    <property name="dark-mode" type="bool" value="true"/>
+    <property name="panel-1" type="empty">
+      <property name="position" type="string" value="p=0;x=960;y=24"/>
+      <property name="length" type="double" value="98.0"/>
+      <property name="position-locked" type="bool" value="true"/>
+      <property name="icon-size" type="uint" value="16"/>
+      <property name="size" type="uint" value="32"/>
+      <property name="plugin-ids" type="array">
+        <value type="int" value="1"/>
+        <value type="int" value="2"/>
+        <value type="int" value="3"/>
+        <value type="int" value="4"/>
+        <value type="int" value="5"/>
+        <value type="int" value="6"/>
+        <value type="int" value="7"/>
+        <value type="int" value="8"/>
+        <value type="int" value="9"/>
+        <value type="int" value="10"/>
+        <value type="int" value="11"/>
+        <value type="int" value="12"/>
+        <value type="int" value="13"/>
+        <value type="int" value="14"/>
+      </property>
+    </property>
+  </property>
+  <property name="plugins" type="empty">
+    <property name="plugin-1" type="string" value="applicationsmenu"/>
+    <property name="plugin-2" type="string" value="tasklist">
+      <property name="grouping" type="uint" value="1"/>
+    </property>
+    <property name="plugin-3" type="string" value="separator">
+      <property name="expand" type="bool" value="true"/>
+      <property name="style" type="uint" value="0"/>
+    </property>
+    <property name="plugin-4" type="string" value="pager"/>
+    <property name="plugin-5" type="string" value="separator">
+      <property name="style" type="uint" value="0"/>
+    </property>
+    <property name="plugin-6" type="string" value="systray">
+      <property name="square-icons" type="bool" value="true"/>
+    </property>
+    <property name="plugin-8" type="string" value="pulseaudio">
+      <property name="enable-keyboard-shortcuts" type="bool" value="true"/>
+      <property name="show-notifications" type="bool" value="true"/>
+    </property>
+    <property name="plugin-9" type="string" value="power-manager-plugin"/>
+    <property name="plugin-10" type="string" value="notification-plugin"/>
+    <property name="plugin-11" type="string" value="separator">
+      <property name="style" type="uint" value="0"/>
+    </property>
+    <property name="plugin-12" type="string" value="clock"/>
+    <property name="plugin-13" type="string" value="separator">
+      <property name="style" type="uint" value="0"/>
+    </property>
+    <property name="plugin-14" type="string" value="actions"/>
+  </property>
+</channel>
+PANEL
+
+# Undo the Whisker rebinding older layers of this image may have baked into
+# the stock keyboard defaults, so Alt+F1 (and the bare-Super bridge) pops the
+# Applications menu this panel contains.
 KBD_DEFAULTS="${XCONF_DIR}/xfce4-keyboard-shortcuts.xml"
 if [ -f "$KBD_DEFAULTS" ] && grep -q 'xfce4-popup-whiskermenu' "$KBD_DEFAULTS"; then
     log "Restoring Alt+F1 to the Applications menu"
@@ -601,6 +694,18 @@ for shortcut_src in \
     fi
 done
 
+# VS Code defaults to its own flat, square-cornered titlebar, which nothing
+# on this desktop can round -- the corners are drawn inside the Electron
+# window. "native" hands decoration back to xfwm4, whose Orchis theme gives
+# the window the same rounded titlebar as every other app. Written before the
+# first launch creates the file, so the user's later edits simply win.
+CODE_SETTINGS="${DESKTOP_HOME}/.config/Code/User/settings.json"
+if [ ! -f "$CODE_SETTINGS" ] && [ -x /usr/bin/code ]; then
+    log "Defaulting VS Code to its native titlebar"
+    mkdir -p "$(dirname "$CODE_SETTINGS")"
+    printf '{\n  "window.titleBarStyle": "native"\n}\n' > "$CODE_SETTINGS"
+fi
+
 chown -R "${DESKTOP_UID}:${DESKTOP_GID}" "$DESKTOP_HOME"
 
 # X11 unix sockets. X creates /tmp/.X11-unix itself but needs the directory to
@@ -674,6 +779,27 @@ export XDG_SESSION_TYPE=x11
 export XDG_CONFIG_DIRS=/etc/xdg
 export XDG_DATA_DIRS=/usr/local/share:/usr/share
 export XDG_CURRENT_DESKTOP=XFCE
+
+# Keep the floating panel centered on the live screen geometry. TigerVNC
+# resizes the screen whenever a client connects with a different window size,
+# and the panel only clamps its floating position on resize -- it never
+# re-centers, so a bar centered for 1920 would sit lopsided on any other
+# width. Poll the geometry and rewrite the position when it changes; the
+# write lands in the user's xfconf, exactly what dragging the panel would
+# produce. The xfconf default (written by install.sh) already matches the
+# image's 1920x1080, so this only matters after a client-driven resize.
+(
+    last_w=""
+    while :; do
+        w="$(xrandr 2>/dev/null | sed -n 's/.* current \([0-9]*\) x [0-9]*,.*/\1/p')"
+        if [ -n "$w" ] && [ "$w" != "$last_w" ]; then
+            last_w="$w"
+            xfconf-query -c xfce4-panel -p /panels/panel-1/position \
+                -s "p=0;x=$((w / 2));y=24" -t string -n >/dev/null 2>&1 || :
+        fi
+        sleep 5
+    done
+) &
 
 # Bridge the X clipboard to the VNC clipboard in both directions.
 #   vncconfig  = VNC side  <-> X selections
