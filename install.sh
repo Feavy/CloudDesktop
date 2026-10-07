@@ -255,6 +255,7 @@ log "Xtigervnc: $(Xtigervnc -version 2>&1 | head -1)"
 log "Installing XFCE (this is the bulk of the image)"
 apt-get install -y -qq \
     xfce4 \
+    xfce4-whiskermenu-plugin \
     xfce4-terminal \
     thunar \
     mousepad \
@@ -283,7 +284,26 @@ check_bin thunar         thunar
 check_bin mousepad       mousepad
 check_bin autocutsel     autocutsel
 check_bin xcape          xcape
+check_bin xfce4-popup-whiskermenu xfce4-whiskermenu-plugin
 log "XFCE verified"
+
+# Make Whisker Menu the desktop's menu. The panel template that a fresh user
+# config is generated from puts the plain applicationsmenu plugin first
+# (plugin-1); swap it for whiskermenu so a stock session shows it. The
+# keyboard-shortcuts defaults bind <Alt>F1 to xfce4-popup-applicationsmenu,
+# which xcape's Super-key bridge presses (see xfce-vnc-session below) --
+# rebind it to xfce4-popup-whiskermenu so the Super key opens the new menu.
+# Both seds change exactly the stock lines; if a future package rename moves
+# them, the greps below warn at build time instead of failing the build.
+log "Switching the panel menu to Whisker Menu"
+PANEL_DEFAULTS=/etc/xdg/xfce4/panel/default.xml
+KBD_DEFAULTS=/etc/xdg/xfce4/xfconf/xfce-perchannel-xml/xfce4-keyboard-shortcuts.xml
+sed -i 's/value="applicationsmenu"/value="whiskermenu"/' "$PANEL_DEFAULTS"
+sed -i 's/xfce4-popup-applicationsmenu/xfce4-popup-whiskermenu/' "$KBD_DEFAULTS"
+grep -q 'value="whiskermenu"' "$PANEL_DEFAULTS" \
+    || warn "Panel template no longer declares applicationsmenu; Whisker Menu was not made the default"
+grep -q 'xfce4-popup-whiskermenu' "$KBD_DEFAULTS" \
+    || warn "Keyboard shortcuts no longer bind a menu popup; the Super key may not open Whisker Menu"
 
 # Slimmed base images sometimes dpkg-path-exclude every .mo under
 # /usr/share/locale to save space. Everything then installs "successfully" and
@@ -573,17 +593,18 @@ export XDG_CURRENT_DESKTOP=XFCE
 vncconfig -nowin >/dev/null 2>&1 &
 autocutsel -fork -selection CLIPBOARD >/dev/null 2>&1 &
 
-# A bare Super (Windows) key press must open the Applications menu, but
-# XFCE's shortcut engine cannot grab a bare modifier: the key events arrive
-# at X (from a physical keyboard or the on-screen sticky Win key alike) and
-# are ignored no matter what is bound in xfconf -- verified live, a
+# A bare Super (Windows) key press must open Whisker Menu, but XFCE's
+# shortcut engine cannot grab a bare modifier: the key events arrive at X
+# (from a physical keyboard or the on-screen sticky Win key alike) and are
+# ignored no matter what is bound in xfconf -- verified live, a
 # successfully-set /commands/custom/Super_L binding does nothing. xcape is
 # the standard bridge: a Super press+release with no other key in between
-# becomes Alt+F1, which the stock session already binds to
-# xfce4-popup-applicationsmenu. Held-Super combos are unaffected; xcape
-# steps aside whenever a second key is pressed first. stderr is kept in a
-# file rather than discarded because this exact step failed silently once
-# already; /tmp is per-pod, so the log never grows across restarts.
+# becomes Alt+F1, which the stock session binds to the menu popup
+# (install.sh rebinds that binding to xfce4-popup-whiskermenu). Held-Super
+# combos are unaffected; xcape steps aside whenever a second key is pressed
+# first. stderr is kept in a file rather than discarded because this exact
+# step failed silently once already; /tmp is per-pod, so the log never grows
+# across restarts.
 xcape -e 'Super_L=Alt_L|F1;Super_R=Alt_L|F1' >/tmp/xcape.log 2>&1 &
 
 # Become the desktop.
