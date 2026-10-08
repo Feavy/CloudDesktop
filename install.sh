@@ -327,7 +327,7 @@ fi
 #    The stock XFCE desktop is functional but spartan (Greybird widgets, flat
 #    grey panel, square window corners). This section gives it the Orchis
 #    theme (github.com/vinceliuice/orchis-theme) in its *compact* flavour,
-#    matched icons, wallpaper, floating rounded panel and a Plank dock.
+#    matched icons, wallpaper, a docked panel and a Plank dock.
 #
 #    "Compact tweaks" means two independent upstream options, and both are
 #    needed -- neither implies the other:
@@ -402,8 +402,25 @@ if [ "${INSTALL_THEME:-1}" = "1" ]; then
         # Destination left to upstream's default (/usr/share/themes, because
         # this runs as root), but it is passed explicitly so the flag is
         # readable here rather than implied by the uid.
-        ( cd "$ORCHIS_SRC" && ./install.sh -d /usr/share/themes -s compact --tweaks compact ) \
-            || die "Orchis theme installation failed"
+        #
+        # Upstream's installer prints an advisory -- "For the rounded float
+        # whiskermenu, you need set your whiskermenu background opacity to 0 !"
+        # -- and, at build time, tries to apply it to a per-user rc file that
+        # does not exist yet, so it cannot. We set the same thing system-wide
+        # further down (whiskermenu/defaults.rc), which is where a fresh
+        # session looks for it, so the banner is dropped from the build log
+        # rather than left telling the builder to do a step that is already
+        # handled. The build's own output is otherwise kept, and a failure
+        # still dumps the whole log.
+        ORCHIS_BUILD_LOG=/tmp/orchis-build.log
+        if ! ( cd "$ORCHIS_SRC" && ./install.sh -d /usr/share/themes -s compact --tweaks compact ) \
+                >"$ORCHIS_BUILD_LOG" 2>&1; then
+            cat "$ORCHIS_BUILD_LOG" >&2
+            rm -f "$ORCHIS_BUILD_LOG"
+            die "Orchis theme installation failed"
+        fi
+        grep -v "rounded float whiskermenu" "$ORCHIS_BUILD_LOG" || true
+        rm -f "$ORCHIS_BUILD_LOG"
         # Orchis ships a matching wallpaper with the theme. Bake it in now,
         # while the source tree is still around (the backdrop defaults below
         # reference it).
@@ -452,25 +469,6 @@ if [ "${INSTALL_THEME:-1}" = "1" ]; then
     [ -d "/usr/share/icons/${ORCHIS_ICONS}" ] \
         || die "${ORCHIS_ICONS} not found in /usr/share/icons after install"
 
-    # ── Round the panel corners ────────────────────────────────────────────
-    #
-    # Orchis styles .xfce4-panel.background as an edge-to-edge bar; the
-    # defaults below float it, and a floating bar with square corners looks
-    # unfinished. The radius is appended to every compiled variant's GTK3 CSS
-    # (the panel is a GTK3 client), and xfwm4's compositor draws the
-    # transparent notches. Idempotent: the marker guards re-runs.
-    log "Rounding the Orchis panel corners"
-    for css in /usr/share/themes/Orchis-*/gtk-3.0/gtk.css; do
-        [ -f "$css" ] || continue
-        grep -q "Orchis floating panel" "$css" || cat >> "$css" <<'CSS'
-
-/* Orchis floating panel */
-.xfce4-panel.background {
-  border-radius: 10px;
-}
-CSS
-    done
-
     # ── Apply the theme through /etc/xdg channel defaults ──────────────────
     #
     # xfsettingsd reads the xsettings channel; its packaged defaults live in
@@ -495,15 +493,24 @@ XSETTINGS
 
     # Window decorations come from their own channel. xfwm4 reads a matching
     # xfwm4 theme out of the Orchis theme directory, and compositing is
-    # switched on explicitly: the rounded panel corners and Plank's
-    # translucency are both alpha, and without a compositor they render as
-    # opaque black squares.
+    # switched on explicitly: Plank's translucency is alpha, and without a
+    # compositor it renders as an opaque black block.
+    #
+    # show_dock_shadow is turned off. xfwm4 draws a drop shadow around every
+    # dock window by default, and Plank's window spans the whole monitor
+    # width and is 118px tall even though it only paints its icon bar: the
+    # shadow is therefore a full-width band floating across the bottom of
+    # the screen, which reads as a translucent panel that is not there.
+    # Turning it off leaves Plank's dock visible and its oversized, fully
+    # transparent window invisible. (It also drops the shadow around the
+    # panels, which is what we want for the docked top bar.)
     cat > "${XCONF_DIR}/xfwm4.xml" <<XFWM
 <?xml version="1.0" encoding="UTF-8"?>
 <channel name="xfwm4" version="1.0">
   <property name="general" type="empty">
     <property name="theme" type="string" value="${ORCHIS_THEME}"/>
     <property name="use_compositing" type="bool" value="true"/>
+    <property name="show_dock_shadow" type="bool" value="false"/>
   </property>
 </channel>
 XFWM
@@ -535,20 +542,22 @@ XFWM
 </channel>
 DESKTOP
 
-    # ── Panel: one floating, rounded top bar ───────────────────────────────
+    # ── Panel: one docked, edge-to-edge top bar ────────────────────────────
     #
     # XFCE ships two panels by default: the top bar (menu, task list, tray,
     # clock, actions) and a 48px bottom bar holding launchers -- the panel
     # XFCE presents as its "dock". The bottom bar is dropped here because
-    # Plank is the dock now; leaving it would put two docks on screen. The
-    # top bar is floated instead of edge-to-edge:
+    # Plank is the dock now; leaving it would put two docks on screen.
     #
-    #   position p=0 (SNAP_POSITION_NONE) takes a base *point* and the panel
-    #   centres itself on it, so x=<half the screen width> centres a bar of
-    #   length 98%, and y=22 hangs it clear of the top edge. x is clamped to
-    #   the screen, so the 1920 default stays sane if DISPLAY_GEOMETRY
-    #   overrides it, and xfce-vnc-session re-centres the bar after a
-    #   client-driven resize.
+    # The top bar stays docked: position p=6 (SNAP_POSITION_NW) with length
+    # 100 pins it to the top-left and edge to edge. That is the geometry
+    # XFCE's own panel template uses, and it is what upstream's
+    # `--tweaks compact` expects -- that tweak is documented as the
+    # "no floating panel variant". An earlier revision floated this bar
+    # (p=0 with a centre point, 98% length) and rounded its corners, which
+    # read as a floating pill with gaps at the top and sides rather than as
+    # a panel. Floating and rounding are therefore deliberately absent here,
+    # and the CSS step below does not add a corner radius either.
     #
     # dark-mode is turned off: it pins the panel to a fixed dark palette
     # regardless of the GTK theme, which would hide the theme the panel is
@@ -557,7 +566,7 @@ DESKTOP
     # The plugin list is deliberately XFCE's own default minus the drop, so
     # nothing changes functionally; a plugin this image lacks is dropped by
     # the panel itself at startup with a log line, never a failure.
-    log "Writing the floating panel defaults"
+    log "Writing the panel defaults (docked, edge to edge)"
     cat > "${XCONF_DIR}/xfce4-panel.xml" <<PANEL
 <?xml version="1.0" encoding="UTF-8"?>
 <channel name="xfce4-panel" version="1.0">
@@ -566,11 +575,11 @@ DESKTOP
     <value type="int" value="1"/>
     <property name="dark-mode" type="bool" value="false"/>
     <property name="panel-1" type="empty">
-      <property name="position" type="string" value="p=0;x=960;y=22"/>
-      <property name="length" type="double" value="98.0"/>
+      <property name="position" type="string" value="p=6;x=0;y=0"/>
+      <property name="length" type="uint" value="100"/>
       <property name="position-locked" type="bool" value="true"/>
       <property name="icon-size" type="uint" value="16"/>
-      <property name="size" type="uint" value="30"/>
+      <property name="size" type="uint" value="26"/>
       <property name="plugin-ids" type="array">
         <value type="int" value="1"/>
         <value type="int" value="2"/>
@@ -719,7 +728,7 @@ exit 0
 PLANKSETUP
     chmod +x /usr/local/bin/plank-setup
 
-    log "Look and feel applied: ${ORCHIS_THEME} (compact), ${ORCHIS_ICONS}, floating panel, Plank dock"
+    log "Look and feel applied: ${ORCHIS_THEME} (compact), ${ORCHIS_ICONS}, docked panel, Plank dock"
 else
     log "INSTALL_THEME=0: keeping the stock XFCE look"
 fi
@@ -1000,31 +1009,6 @@ export XDG_CURRENT_DESKTOP=XFCE
 # image was built with INSTALL_THEME=0.
 [ -x /usr/local/bin/plank-setup ] && /usr/local/bin/plank-setup || true
 
-# Keep the floating panel centred on the live screen geometry. TigerVNC resizes
-# the screen whenever a client connects with a different window size, and the
-# panel only clamps its floating position on resize -- it never re-centres, so
-# a bar centred for 1920 would sit lopsided on any other width. Poll the
-# geometry and rewrite the position when it changes; the write lands in the
-# user's xfconf, exactly what dragging the panel would produce. The xfconf
-# default (written by install.sh) already matches the image's 1920x1080, so
-# this only matters after a client-driven resize. Absent with INSTALL_THEME=0,
-# where the stock panel is edge-to-edge and has nothing to centre.
-if [ -f /etc/xdg/xfce4/xfconf/xfce-perchannel-xml/xfce4-panel.xml ] \
-    && grep -q 'p=0;' /etc/xdg/xfce4/xfconf/xfce-perchannel-xml/xfce4-panel.xml; then
-    (
-        last_w=""
-        while :; do
-            w="$(xrandr 2>/dev/null | sed -n 's/.* current \([0-9]*\) x [0-9]*,.*/\1/p')"
-            if [ -n "$w" ] && [ "$w" != "$last_w" ]; then
-                last_w="$w"
-                xfconf-query -c xfce4-panel -p /panels/panel-1/position \
-                    -s "p=0;x=$((w / 2));y=22" -t string -n >/dev/null 2>&1 || true
-            fi
-            sleep 5
-        done
-    ) &
-fi
-
 # Bridge the X clipboard to the VNC clipboard in both directions.
 #   vncconfig  = VNC side  <-> X selections
 #   autocutsel = PRIMARY   <-> CLIPBOARD
@@ -1250,7 +1234,7 @@ $(if have_app firefox;     then echo "    firefox    $(firefox --version)"; fi)
 $(if have_app code;        then echo "    code       $(code --version | head -1)"; fi)
 
   Desktop look:
-$(if [ "${INSTALL_THEME:-1}" = "1" ]; then echo "    ${ORCHIS_THEME:-Orchis-Dark-Compact} (compact), ${ORCHIS_ICONS:-Tela-circle-dark} icons, floating panel, Plank dock"; else echo "    stock XFCE (INSTALL_THEME=0)"; fi)
+$(if [ "${INSTALL_THEME:-1}" = "1" ]; then echo "    ${ORCHIS_THEME:-Orchis-Dark-Compact} (compact), ${ORCHIS_ICONS:-Tela-circle-dark} icons, docked panel, Plank dock"; else echo "    stock XFCE (INSTALL_THEME=0)"; fi)
 
   CMD ["start-vnc"]
 

@@ -132,7 +132,7 @@ Extras:
 | `EXTRA_LOCALES` | *(empty)* | Extra locales baked in at build time, space-separated (`--build-arg EXTRA_LOCALES="fr_FR.UTF-8 de_DE.UTF-8"`). Only `en_US.UTF-8` is generated otherwise; `start-vnc` also generates a missing session locale on the fly at startup |
 | `INSTALL_NODE` | `1` | Install Node.js from NodeSource (Ubuntu's own is 18, EOL). `Dockerfile.desktop` sets this to `0` |
 | `NODE_MAJOR` | `22` | NodeSource major version |
-| `INSTALL_THEME` | `1` | Theme the desktop with the [Orchis](https://github.com/vinceliuice/orchis-theme) GTK/xfwm4 theme in its **compact** flavour, matching Tela-circle icons, the Orchis wallpaper, a floating rounded panel and a Plank dock. `0` keeps the stock XFCE look |
+| `INSTALL_THEME` | `1` | Theme the desktop with the [Orchis](https://github.com/vinceliuice/orchis-theme) GTK/xfwm4 theme in its **compact** flavour, matching Tela-circle icons, the Orchis wallpaper, a docked edge-to-edge panel and a Plank dock. `0` keeps the stock XFCE look |
 | `ORCHIS_THEME` | `Orchis-Dark-Compact` | Which built Orchis variant the session starts on. All three (`-Compact`, `-Light-Compact`, `-Dark-Compact`) are installed |
 | `ORCHIS_ICONS` | `Tela-circle-dark` | Icon theme to select (the Tela-circle source installs `Tela-circle`, `-light` and `-dark`) |
 
@@ -165,13 +165,24 @@ Both desktop images are themed at build time unless `INSTALL_THEME=0` is passed:
   tarball because those tarballs are generated without `--tweaks compact`.
 - **Tela-circle** icons, the matching set Orchis' own `index.theme` references.
 - The **Orchis wallpaper**, as the default backdrop.
-- A **floating, rounded top panel** — XFCE's stock second (bottom) panel is dropped,
-  and `xfwm4` compositing is switched on, since the rounded corners and the dock's
-  translucency are alpha and render as opaque black squares without it.
+- A **docked, edge-to-edge top panel**. XFCE's stock second (bottom) panel is
+  dropped, and the surviving bar keeps XFCE's own geometry — `p=6;x=0;y=0` with
+  100% length — so it sits flush against the top and both sides. That is what
+  upstream's `--tweaks compact` means by "no floating panel variant"; the bar is
+  deliberately *not* floated or rounded.
 - A **Plank dock** along the bottom, with launchers for the applications the image
-  ships. Because XFCE's panel no longer holds them, the web client's own dock is now
-  a controls-only strip down the left edge (upload, download, resolution,
+  ships. Because XFCE's panel no longer holds them, the web client's own dock is
+  now a controls-only strip down the left edge (upload, download, resolution,
   fullscreen, window switcher, Ctrl+Alt+Del, restart, settings).
+
+`xfwm4` compositing is switched on (Plank's dock background is alpha, and renders
+as an opaque black block without it), and `show_dock_shadow` is switched **off**.
+Plank asks for a window the full width of the monitor and 118px tall even though
+it only paints its icon bar, so the drop shadow xfwm4 draws around dock windows
+shows up as a translucent band floating across the bottom of the screen — reading
+as a panel that is not there. With the shadow off, Plank's dock is visible and its
+oversized, fully transparent window is not. This also drops the shadow under the
+panel, which suits a bar that is flush with the screen edge.
 
 All of it is applied through `/etc/xdg`, never a user's `$HOME`: xfconfd treats a
 channel XML file there as that channel's defaults for any user without an override,
