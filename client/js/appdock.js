@@ -60,17 +60,22 @@ export function iconUrl(id, size) {
   return `/api/desktop/apps/icon/${encodeURIComponent(id)}?size=${size}${v}`;
 }
 
-// Every icon is a fallback glyph with the resolved theme icon layered over
-// it; a failed load simply reveals the glyph.
-function iconShell(url) {
+// The resolved theme icon, with a generic glyph swapped in only when the
+// image fails to load (no icon resolved, or an XPM the browser cannot
+// render). The glyph must never sit underneath the image: theme icons are
+// transparent, so it would peek through behind every icon.
+// `cls` lets the grid tiles size the same markup with their own rules.
+function iconShell(url, cls = 'app-icon-shell') {
   const shell = document.createElement('span');
-  shell.className = 'app-icon-shell';
-  shell.innerHTML = FALLBACK_ICON_SVG;
+  shell.className = cls;
   const img = document.createElement('img');
   img.alt = '';
   img.loading = 'lazy';
   img.src = url;
-  img.addEventListener('error', () => img.remove());
+  img.addEventListener('error', () => {
+    img.remove();
+    shell.innerHTML = FALLBACK_ICON_SVG;
+  });
   shell.appendChild(img);
   return shell;
 }
@@ -272,7 +277,7 @@ function gridTile(id, running) {
   tile.className = 'apps-tile' + (running ? ' running' : '');
   tile.dataset.app = id;
   if (app && app.comment) tile.title = app.comment;
-  tile.appendChild(iconShell(iconUrl(id, 128)));
+  tile.appendChild(iconShell(iconUrl(id, 128), 'app-icon-shell apps-tile-icon'));
   const name = document.createElement('span');
   name.className = 'apps-tile-name';
   name.textContent = app ? app.name : id;
@@ -598,6 +603,19 @@ export function initAppDock(options = {}) {
     if (Date.now() - menuOpenedAt < 350) return; // the gesture that opened it
     if (!ctxMenu.contains(e.target)) closeCtxMenu();
   });
+
+  // A click on the VNC canvas never reaches the click listener above:
+  // noVNC's mouse handlers stop propagation. Close the menu from the
+  // capture phase on any pointer going down outside the menu itself —
+  // the canvas included. (The pointerdown of the gesture that opens the
+  // menu happens while it is still hidden, so it never closes itself.)
+  const closeMenuOnPointerDown = (e) => {
+    if (ctxMenu.hidden || ctxMenu.contains(e.target)) return;
+    closeCtxMenu();
+  };
+  document.addEventListener('pointerdown', closeMenuOnPointerDown, { capture: true });
+  document.addEventListener('touchstart', closeMenuOnPointerDown,
+    { capture: true, passive: true });
 
   document.addEventListener('keydown', (e) => {
     if (e.key === 'Escape') closeCtxMenu();

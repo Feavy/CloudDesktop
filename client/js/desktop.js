@@ -704,17 +704,26 @@ async function refreshWindowList() {
     windowListItems.innerHTML = data.windows.map(w => {
       const ico = windowIcon(w.title);
       const safeTitle = w.title.replace(/</g, '&lt;').replace(/>/g, '&gt;');
-      // The generic glyph renders underneath; when the window maps to an
-      // application its resolved theme icon is layered over it (an image
-      // that fails to load just reveals the glyph).
-      const img = w.appId
+      // Only the resolved app icon renders; the heuristic glyph is inserted
+      // if that image fails. It must not sit underneath the image — theme
+      // icons are transparent, so the glyph would show through.
+      const icon = w.appId
         ? `<img src="${iconUrl(w.appId, 32)}" alt="" loading="lazy">`
-        : '';
+        : iconSvgs[ico];
       return `<button class="window-entry" data-wid="${w.id}">
-        <span class="window-entry-icon">${iconSvgs[ico]}${img}</span>
+        <span class="window-entry-icon" data-fallback="${ico}">${icon}</span>
         <span class="window-entry-title">${safeTitle}</span>
       </button>`;
     }).join('');
+
+    // Failed icon loads fall back to the heuristic glyph.
+    windowListItems.querySelectorAll('.window-entry-icon img').forEach((img) => {
+      img.addEventListener('error', () => {
+        const wrap = img.parentElement;
+        img.remove();
+        wrap.innerHTML = iconSvgs[wrap.dataset.fallback] || iconSvgs.window;
+      });
+    });
 
     // Attach click handlers
     windowListItems.querySelectorAll('.window-entry').forEach(btn => {
@@ -746,6 +755,15 @@ document.addEventListener('click', (e) => {
     windowList.hidden = true;
   }
 });
+
+// Canvas clicks are stopped by noVNC before they reach the listener above,
+// so the switcher also closes from the capture phase on the canvas itself.
+function closeWindowListForCanvas() {
+  if (!windowList.hidden) windowList.hidden = true;
+}
+vncContainer.addEventListener('pointerdown', closeWindowListForCanvas, { capture: true });
+vncContainer.addEventListener('touchstart', closeWindowListForCanvas,
+  { capture: true, passive: true });
 
 // ── App dock (bottom) ───────────────────────────────────────
 // The browser-side replacement for the Plank dock: pinned + running
