@@ -65,7 +65,9 @@ const storage = multer.diskStorage({
 });
 const upload = multer({ storage, limits: { fileSize: 100 * 1024 * 1024 } });
 
-// Allowlisted apps for launch endpoint. Order mirrors the dock.
+// Allowlisted apps for the launch endpoint. The web client's dock no longer
+// offers these (application launchers moved to the desktop's Plank dock), but
+// the endpoint stays part of the HTTP API for other consumers.
 const ALLOWED_APPS = {
   filemanager: { cmd: 'thunar', args: [] },
   terminal: { cmd: 'xfce4-terminal', args: [] },
@@ -76,9 +78,11 @@ const ALLOWED_APPS = {
   vscode: { cmd: 'code', args: ['--no-sandbox'] },
 };
 
-// Only offer dock icons for apps that are actually installed in this pod.
-// A minimal image has no Chrome, and a dead icon is worse than a missing one.
-// Resolved once at startup because the package set is static.
+// Report which allowlisted apps are actually installed in this pod, as
+// `/config.canLaunch`. Kept for API consumers even though the current web
+// client's dock no longer renders app icons (the desktop's Plank dock owns
+// application launching). Resolved once at startup because the package set is
+// static.
 const availableApps = Object.entries(ALLOWED_APPS)
   .filter(([, app]) => {
     const found = (process.env.PATH || '').split(':').some((dir) => {
@@ -86,12 +90,12 @@ const availableApps = Object.entries(ALLOWED_APPS)
       try { fs.accessSync(path.join(dir, app.cmd), fs.constants.X_OK); return true; }
       catch { return false; }
     });
-    if (!found) console.log(`Dock: '${app.cmd}' not found, hiding its icon`);
+    if (!found) console.log(`Launch: '${app.cmd}' not found, omitting it from canLaunch`);
     return found;
   })
   .map(([name]) => name);
 
-// GET /api/desktop/config — dock configuration + environment info
+// GET /api/desktop/config — environment info and which dock actions apply
 router.get('/config', (_req, res) => {
   res.json({
     homeDir: RUN_HOME,

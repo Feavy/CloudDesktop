@@ -133,97 +133,14 @@
     </div>
   </div>
 
-  <!-- Dock trigger (hover zone at very bottom) -->
+  <!-- Dock trigger (hover zone along the left edge) -->
   <div id="dock-trigger" class="dock-trigger"></div>
 
-  <!-- ═══════════════════════════════════════ Dock ═══════════════════════════════════════ -->
-  <div id="dock" class="dock" role="toolbar" aria-label="Application dock">
-
-    <!-- ── App icons ── -->
-    <div class="dock-section dock-apps" id="dock-apps">
-
-      <!-- Files -->
-      <button class="dock-item dock-app" data-app="filemanager" data-label="Files">
-        <div class="app-icon">
-          <svg viewBox="0 0 60 60" fill="none" xmlns="http://www.w3.org/2000/svg">
-            <rect width="60" height="60" fill="#1565c0"/>
-            <!-- Back folder -->
-            <rect x="7" y="28" width="46" height="24" rx="5" fill="#0d47a1"/>
-            <!-- Folder tab -->
-            <path d="M8 28V24Q8 20 12 20H27Q31 20 32.5 24L36 28Z" fill="#1565c0"/>
-            <!-- Front folder -->
-            <rect x="7" y="30" width="46" height="22" rx="5" fill="#1976d2"/>
-            <!-- Shine -->
-            <rect x="7" y="30" width="46" height="9" rx="5" fill="rgba(255,255,255,0.1)"/>
-            <!-- Paper stack inside -->
-            <rect x="18" y="36" width="24" height="3" rx="1.5" fill="rgba(255,255,255,0.5)"/>
-            <rect x="18" y="42" width="17" height="3" rx="1.5" fill="rgba(255,255,255,0.35)"/>
-            <!-- Small folder on top left of desktop -->
-            <rect x="8" y="10" width="18" height="14" rx="3" fill="#42a5f5"/>
-            <path d="M8 14V12Q8 10 10 10H14Q16 10 17 12L19 14Z" fill="#1e88e5"/>
-            <rect x="8" y="15" width="18" height="9" rx="3" fill="#64b5f6"/>
-          </svg>
-        </div>
-      </button>
-
-      <!-- Terminal -->
-      <button class="dock-item dock-app" data-app="terminal" data-label="Terminal">
-        <div class="app-icon">
-          <svg viewBox="0 0 60 60" fill="none" xmlns="http://www.w3.org/2000/svg">
-            <defs>
-              <linearGradient id="term-bg" x1="0" y1="0" x2="60" y2="60" gradientUnits="userSpaceOnUse">
-                <stop stop-color="#1a1a2e"/>
-                <stop offset="1" stop-color="#0d0d15"/>
-              </linearGradient>
-            </defs>
-            <rect width="60" height="60" fill="url(#term-bg)"/>
-            <rect x="5" y="8" width="50" height="44" rx="5" fill="#16213e"/>
-            <rect x="5" y="8" width="50" height="10" rx="5" fill="#0f3460"/>
-            <circle cx="13" cy="13" r="2.5" fill="#ff5f57"/>
-            <circle cx="21" cy="13" r="2.5" fill="#febc2e"/>
-            <circle cx="29" cy="13" r="2.5" fill="#28c840"/>
-            <path d="M12 30l10 7-10 7" stroke="#30d158" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/>
-            <line x1="27" y1="44" x2="44" y2="44" stroke="#30d158" stroke-width="3" stroke-linecap="round"/>
-          </svg>
-        </div>
-      </button>
-
-      <!-- Synaptic -->
-      <button class="dock-item dock-app" data-app="synaptic" data-label="Synaptic">
-        <div class="app-icon">
-          <svg viewBox="0 0 60 60" fill="none" xmlns="http://www.w3.org/2000/svg">
-            <defs>
-              <linearGradient id="synaptic-bg" x1="0" y1="0" x2="60" y2="60" gradientUnits="userSpaceOnUse">
-                <stop stop-color="#7e57c2"/>
-                <stop offset="1" stop-color="#4527a0"/>
-              </linearGradient>
-            </defs>
-            <rect width="60" height="60" fill="url(#synaptic-bg)"/>
-            <!-- Package box -->
-            <rect x="14" y="30" width="32" height="20" rx="3" fill="#e0b074"/>
-            <rect x="14" y="30" width="32" height="5" rx="3" fill="#c89550"/>
-            <!-- Tape -->
-            <rect x="28" y="30" width="4" height="20" fill="rgba(255,255,255,0.55)"/>
-            <!-- Install arrow into the box -->
-            <path d="M30 8v13" stroke="#30d158" stroke-width="3.5" stroke-linecap="round"/>
-            <path d="M23 15l7 7 7-7" stroke="#30d158" stroke-width="3.5" stroke-linecap="round" stroke-linejoin="round"/>
-          </svg>
-        </div>
-      </button>
-
-      <!-- Chrome -->
-      <button class="dock-item dock-app" data-app="chrome" data-label="Chrome">
-        <img class="app-icon app-icon-img" src="/img/chrome.svg?cv=%CACHE_VERSION%" alt="Chrome" draggable="false">
-      </button>
-
-      <!-- VS Code -->
-      <button class="dock-item dock-app" data-app="vscode" data-label="VS Code">
-        <img class="app-icon app-icon-img" src="/img/vscode.svg?cv=%CACHE_VERSION%" alt="VS Code" draggable="false">
-      </button>
-
-    </div><!-- /dock-apps -->
-
-    <div class="dock-sep"></div>
+  <!-- ═══════════════════════════════════════ Dock ═══════════════════════════════════════
+       Browser-side controls only. Application launchers live in the desktop's own
+       Plank dock, which owns the bottom edge, so this strip stays out of its way
+       on the left. -->
+  <div id="dock" class="dock" role="toolbar" aria-label="Desktop controls">
 
     <!-- ── Utilities ── -->
     <div class="dock-section">

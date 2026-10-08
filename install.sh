@@ -22,6 +22,10 @@
 #                         which restores the man pages, docs and translation
 #                         catalogs the minimized ubuntu:24.04 image dpkg-strips
 #    INSTALL_TOOLS=0      skip the common Linux command-line tools
+#    INSTALL_THEME=0      keep the stock XFCE look (no Orchis, no Tela icons,
+#                         no Plank dock); see section 8
+#    ORCHIS_THEME         Orchis variant to apply (default: Orchis-Dark-Compact)
+#    ORCHIS_ICONS         icon theme to apply (default: Tela-circle-dark)
 #    EXTRA_LOCALES        extra locales to bake in, space-separated, e.g.
 #                         "fr_FR.UTF-8 de_DE.UTF-8" (en_US.UTF-8 is always
 #                         generated; see also start-vnc's on-the-fly fallback)
@@ -318,7 +322,410 @@ if ! ls /usr/share/locale/*/LC_MESSAGES/*.mo >/dev/null 2>&1; then
 fi
 
 # ─────────────────────────────────────────────────────────────────────────────
-# 8. Desktop applications
+# 8. Look and feel: the Orchis theme with the compact tweaks
+#
+#    The stock XFCE desktop is functional but spartan (Greybird widgets, flat
+#    grey panel, square window corners). This section gives it the Orchis
+#    theme (github.com/vinceliuice/orchis-theme) in its *compact* flavour,
+#    matched icons, wallpaper, floating rounded panel and a Plank dock.
+#
+#    "Compact tweaks" means two independent upstream options, and both are
+#    needed -- neither implies the other:
+#
+#      -s compact        the compact *size* variant: this is the one that
+#                        actually densifies the desktop. It shrinks widget
+#                        padding, margins, font sizes and corner radii (see
+#                        src/_sass/_variables.scss: $space-size, $medium-size,
+#                        $root-font-size all key off $compact). It produces the
+#                        Orchis-*-Compact theme directories used below.
+#      --tweaks compact  the compact *panel* tweak ($panel_style). Upstream
+#                        this only affects the GNOME Shell/Budgie panel and the
+#                        .xfce4-panel CSS is unaffected, so it is passed for
+#                        completeness rather than for the XFCE look.
+#
+#    Building from the pinned upstream source (not the prebuilt release
+#    tarball) is deliberate: the release tarballs are generated with plain
+#    `./install.sh -t all`, i.e. WITHOUT --tweaks compact, so the tarball's
+#    Orchis-Compact directories are the size variant only and cannot carry the
+#    tweak. Compiling gives both from one source and pins the result by commit.
+#
+#    Everything is applied through /etc/xdg, never the runtime user's $HOME:
+#    xfconfd treats a channel XML file found in XDG_CONFIG_DIRS as that
+#    channel's *defaults* for any user with no override of their own, and a
+#    container session is always a fresh home. So a stock container picks the
+#    whole look up with no per-user setup. Set INSTALL_THEME=0 to skip the lot
+#    and keep a plain desktop.
+# ─────────────────────────────────────────────────────────────────────────────
+if [ "${INSTALL_THEME:-1}" = "1" ]; then
+    # Pinned upstream revision (tag 2026-07-07). Bump by rewriting the SHA;
+    # a branch name here would make image contents unreproducible.
+    ORCHIS_COMMIT="29975e38624ec93d8e460f8ea17129bcb68c05ef"
+    ORCHIS_THEME="${ORCHIS_THEME:-Orchis-Dark-Compact}"
+    ORCHIS_ICONS="${ORCHIS_ICONS:-Tela-circle-dark}"
+    XDG_CONF_DIR=/etc/xdg/xfce4
+    XCONF_DIR="${XDG_CONF_DIR}/xfconf/xfce-perchannel-xml"
+
+    # sassc compiles the SCSS; murrine and gnome-themes-extra provide the GTK2
+    # engines the GTK2 themes (and therefore Synaptic) need; xz-utils unpacks
+    # the source tarball; gtk-update-icon-cache is what Tela's install.sh
+    # invokes; dconf-gsettings-backend + libglib2.0-bin give gsettings, which
+    # plank-setup uses at session start.
+    log "Installing theme packages (Orchis build deps, Tela icons, Plank)"
+    apt-get install -y -qq --no-install-recommends \
+        sassc gtk2-engines-murrine gnome-themes-extra \
+        xz-utils gtk-update-icon-cache \
+        plank dconf-gsettings-backend libglib2.0-bin
+
+    # ── Orchis, built from source with both compact options ────────────────
+    #
+    # Guarded so Dockerfile.full, which re-runs this script over a base that
+    # already carries the theme, does not recompile it (the compile is the
+    # expensive step). The guard names the specific variant because that is
+    # what the desktop actually loads.
+    if [ -d "/usr/share/themes/${ORCHIS_THEME}" ]; then
+        log "Orchis theme already installed; skipping the build"
+    else
+        log "Building the Orchis theme (commit ${ORCHIS_COMMIT:0:7}, compact)"
+        ORCHIS_SRC=/tmp/orchis-theme
+        rm -rf "$ORCHIS_SRC"
+        mkdir -p "$ORCHIS_SRC"
+        # The codeload tarball for a commit, not `git clone`: no git needed in
+        # the image and no tag that could move under the build.
+        curl -fsSL "https://codeload.github.com/vinceliuice/orchis-theme/tar.gz/${ORCHIS_COMMIT}" \
+            -o /tmp/orchis-theme.tar.gz \
+            || die "Could not download the Orchis theme source"
+        tar -xzf /tmp/orchis-theme.tar.gz -C "$ORCHIS_SRC" --strip-components=1 \
+            || die "Could not unpack the Orchis theme source"
+        rm -f /tmp/orchis-theme.tar.gz
+        # -s compact   select the compact size variant
+        # --tweaks compact  select the compact panel tweak
+        # Destination left to upstream's default (/usr/share/themes, because
+        # this runs as root), but it is passed explicitly so the flag is
+        # readable here rather than implied by the uid.
+        ( cd "$ORCHIS_SRC" && ./install.sh -d /usr/share/themes -s compact --tweaks compact ) \
+            || die "Orchis theme installation failed"
+        # Orchis ships a matching wallpaper with the theme. Bake it in now,
+        # while the source tree is still around (the backdrop defaults below
+        # reference it).
+        mkdir -p /usr/share/backgrounds
+        install -m 0644 "$ORCHIS_SRC/wallpaper/1080p.jpg" \
+            /usr/share/backgrounds/orchis-1080p.jpg 2>/dev/null \
+            || warn "Orchis wallpaper missing from the source tree"
+        # The source tree carries SCSS, docs and the ci/ helper scripts this
+        # image has no use for. The compiled themes are already in
+        # /usr/share/themes; drop the rest so it never reaches a layer.
+        rm -rf "$ORCHIS_SRC"
+    fi
+    [ -d "/usr/share/themes/${ORCHIS_THEME}" ] \
+        || die "${ORCHIS_THEME} not found in /usr/share/themes after the build"
+    [ -f /usr/share/backgrounds/orchis-1080p.jpg ] \
+        || warn "Orchis wallpaper missing; the default backdrop will be empty"
+
+    # ── Tela-circle: the icon theme Orchis' own index.theme references ─────
+    #
+    # (GtkTheme above, IconTheme=Tela-circle-dark.) Installing it means app
+    # and file icons actually match the widgets instead of staying on XFCE's
+    # stock elementary set. Tela ships pre-built SVG sources: its install.sh
+    # only copies files and recolours them with sed, so there is nothing to
+    # compile, but it does call gtk-update-icon-cache (installed above).
+    if [ -d "/usr/share/icons/Tela-circle" ]; then
+        log "Tela-circle icons already installed; skipping"
+    else
+        log "Installing the Tela-circle icon theme"
+        TELA_SRC=/tmp/tela-circle
+        rm -rf "$TELA_SRC"
+        mkdir -p "$TELA_SRC"
+        # Pinned to the same date-based tag as the Orchis pin above.
+        curl -fsSL "https://codeload.github.com/vinceliuice/Tela-circle-icon-theme/tar.gz/c0adf1ab92f564e3b83540441921f26d121b09c3" \
+            -o /tmp/tela-circle.tar.gz \
+            || die "Could not download the Tela-circle source"
+        tar -xzf /tmp/tela-circle.tar.gz -C "$TELA_SRC" --strip-components=1 \
+            || die "Could not unpack the Tela-circle source"
+        rm -f /tmp/tela-circle.tar.gz
+        # Default colour set: installs Tela-circle plus the -dark/-light pair.
+        # Only the standard colour is requested, so this is ~13 MB rather than
+        # the ~350 MB an `-a` (all colours) install would cost.
+        ( cd "$TELA_SRC" && ./install.sh -d /usr/share/icons ) \
+            || die "Tela-circle icon installation failed"
+        rm -rf "$TELA_SRC"
+    fi
+    [ -d "/usr/share/icons/${ORCHIS_ICONS}" ] \
+        || die "${ORCHIS_ICONS} not found in /usr/share/icons after install"
+
+    # ── Round the panel corners ────────────────────────────────────────────
+    #
+    # Orchis styles .xfce4-panel.background as an edge-to-edge bar; the
+    # defaults below float it, and a floating bar with square corners looks
+    # unfinished. The radius is appended to every compiled variant's GTK3 CSS
+    # (the panel is a GTK3 client), and xfwm4's compositor draws the
+    # transparent notches. Idempotent: the marker guards re-runs.
+    log "Rounding the Orchis panel corners"
+    for css in /usr/share/themes/Orchis-*/gtk-3.0/gtk.css; do
+        [ -f "$css" ] || continue
+        grep -q "Orchis floating panel" "$css" || cat >> "$css" <<'CSS'
+
+/* Orchis floating panel */
+.xfce4-panel.background {
+  border-radius: 10px;
+}
+CSS
+    done
+
+    # ── Apply the theme through /etc/xdg channel defaults ──────────────────
+    #
+    # xfsettingsd reads the xsettings channel; its packaged defaults live in
+    # xfce4-settings' own XML. Rather than editing that file in place (which
+    # would break whenever the package reshuffles it), write our own channel
+    # document here. xfconfd picks it up from XDG_CONFIG_DIRS as the channel's
+    # default, and the session exports XDG_CONFIG_DIRS=/etc/xdg. Only the two
+    # theme entries are set: everything else falls back to xfsettingsd's
+    # built-in defaults, so a future XFCE release can add keys without this
+    # file silently pinning them to a stale value.
+    log "Selecting ${ORCHIS_THEME} and ${ORCHIS_ICONS} as the session defaults"
+    mkdir -p "$XCONF_DIR"
+    cat > "${XCONF_DIR}/xsettings.xml" <<XSETTINGS
+<?xml version="1.0" encoding="UTF-8"?>
+<channel name="xsettings" version="1.0">
+  <property name="Net" type="empty">
+    <property name="ThemeName" type="string" value="${ORCHIS_THEME}"/>
+    <property name="IconThemeName" type="string" value="${ORCHIS_ICONS}"/>
+  </property>
+</channel>
+XSETTINGS
+
+    # Window decorations come from their own channel. xfwm4 reads a matching
+    # xfwm4 theme out of the Orchis theme directory, and compositing is
+    # switched on explicitly: the rounded panel corners and Plank's
+    # translucency are both alpha, and without a compositor they render as
+    # opaque black squares.
+    cat > "${XCONF_DIR}/xfwm4.xml" <<XFWM
+<?xml version="1.0" encoding="UTF-8"?>
+<channel name="xfwm4" version="1.0">
+  <property name="general" type="empty">
+    <property name="theme" type="string" value="${ORCHIS_THEME}"/>
+    <property name="use_compositing" type="bool" value="true"/>
+  </property>
+</channel>
+XFWM
+
+    # Wallpaper. TigerVNC names its RandR output VNC-0 (older versions say
+    # Virtual-0), and a per-monitor entry for a monitor that never appears is
+    # simply unused, so both are written rather than guessing. image-style 5
+    # is zoomed: fills the screen without distorting the image.
+    log "Writing the Orchis wallpaper default"
+    cat > "${XCONF_DIR}/xfce4-desktop.xml" <<DESKTOP
+<?xml version="1.0" encoding="UTF-8"?>
+<channel name="xfce4-desktop" version="1.0">
+  <property name="backdrop" type="empty">
+    <property name="screen0" type="empty">
+      <property name="monitorVNC-0" type="empty">
+        <property name="workspace0" type="empty">
+          <property name="last-image" type="string" value="/usr/share/backgrounds/orchis-1080p.jpg"/>
+          <property name="image-style" type="int" value="5"/>
+        </property>
+      </property>
+      <property name="monitorVirtual-0" type="empty">
+        <property name="workspace0" type="empty">
+          <property name="last-image" type="string" value="/usr/share/backgrounds/orchis-1080p.jpg"/>
+          <property name="image-style" type="int" value="5"/>
+        </property>
+      </property>
+    </property>
+  </property>
+</channel>
+DESKTOP
+
+    # ── Panel: one floating, rounded top bar ───────────────────────────────
+    #
+    # XFCE ships two panels by default: the top bar (menu, task list, tray,
+    # clock, actions) and a 48px bottom bar holding launchers -- the panel
+    # XFCE presents as its "dock". The bottom bar is dropped here because
+    # Plank is the dock now; leaving it would put two docks on screen. The
+    # top bar is floated instead of edge-to-edge:
+    #
+    #   position p=0 (SNAP_POSITION_NONE) takes a base *point* and the panel
+    #   centres itself on it, so x=<half the screen width> centres a bar of
+    #   length 98%, and y=22 hangs it clear of the top edge. x is clamped to
+    #   the screen, so the 1920 default stays sane if DISPLAY_GEOMETRY
+    #   overrides it, and xfce-vnc-session re-centres the bar after a
+    #   client-driven resize.
+    #
+    # dark-mode is turned off: it pins the panel to a fixed dark palette
+    # regardless of the GTK theme, which would hide the theme the panel is
+    # meant to follow.
+    #
+    # The plugin list is deliberately XFCE's own default minus the drop, so
+    # nothing changes functionally; a plugin this image lacks is dropped by
+    # the panel itself at startup with a log line, never a failure.
+    log "Writing the floating panel defaults"
+    cat > "${XCONF_DIR}/xfce4-panel.xml" <<PANEL
+<?xml version="1.0" encoding="UTF-8"?>
+<channel name="xfce4-panel" version="1.0">
+  <property name="configver" type="int" value="2"/>
+  <property name="panels" type="array">
+    <value type="int" value="1"/>
+    <property name="dark-mode" type="bool" value="false"/>
+    <property name="panel-1" type="empty">
+      <property name="position" type="string" value="p=0;x=960;y=22"/>
+      <property name="length" type="double" value="98.0"/>
+      <property name="position-locked" type="bool" value="true"/>
+      <property name="icon-size" type="uint" value="16"/>
+      <property name="size" type="uint" value="30"/>
+      <property name="plugin-ids" type="array">
+        <value type="int" value="1"/>
+        <value type="int" value="2"/>
+        <value type="int" value="3"/>
+        <value type="int" value="4"/>
+        <value type="int" value="5"/>
+        <value type="int" value="6"/>
+        <value type="int" value="8"/>
+        <value type="int" value="9"/>
+        <value type="int" value="10"/>
+        <value type="int" value="11"/>
+        <value type="int" value="12"/>
+        <value type="int" value="13"/>
+        <value type="int" value="14"/>
+      </property>
+    </property>
+  </property>
+  <property name="plugins" type="empty">
+    <property name="plugin-1" type="string" value="whiskermenu"/>
+    <property name="plugin-2" type="string" value="tasklist">
+      <property name="grouping" type="uint" value="1"/>
+    </property>
+    <property name="plugin-3" type="string" value="separator">
+      <property name="expand" type="bool" value="true"/>
+      <property name="style" type="uint" value="0"/>
+    </property>
+    <property name="plugin-4" type="string" value="pager"/>
+    <property name="plugin-5" type="string" value="separator">
+      <property name="style" type="uint" value="0"/>
+    </property>
+    <property name="plugin-6" type="string" value="systray">
+      <property name="square-icons" type="bool" value="true"/>
+    </property>
+    <property name="plugin-8" type="string" value="pulseaudio">
+      <property name="enable-keyboard-shortcuts" type="bool" value="true"/>
+      <property name="show-notifications" type="bool" value="true"/>
+    </property>
+    <property name="plugin-9" type="string" value="power-manager-plugin"/>
+    <property name="plugin-10" type="string" value="notification-plugin"/>
+    <property name="plugin-11" type="string" value="separator">
+      <property name="style" type="uint" value="0"/>
+    </property>
+    <property name="plugin-12" type="string" value="clock"/>
+    <property name="plugin-13" type="string" value="separator">
+      <property name="style" type="uint" value="0"/>
+    </property>
+    <property name="plugin-14" type="string" value="actions"/>
+  </property>
+</channel>
+PANEL
+
+    # Whisker Menu draws its own background: at menu-opacity 100 it paints an
+    # opaque rectangle over the theme's rounded popup, squaring it off. The
+    # plugin reads this key from defaults.rc in XDG_CONFIG_DIRS for a panel
+    # instance that has none of its own. Appended, not replaced: the file is a
+    # package conffile and upstream keeps other defaults in it (the
+    # switch-user command, for one). The directory is created defensively so a
+    # future package that ships no defaults.rc still gets the key.
+    WHISKER_DEFAULTS=/etc/xdg/xfce4/whiskermenu/defaults.rc
+    install -d "$(dirname "$WHISKER_DEFAULTS")"
+    touch "$WHISKER_DEFAULTS"
+    grep -q '^menu-opacity=' "$WHISKER_DEFAULTS" \
+        || printf 'menu-opacity=0\n' >> "$WHISKER_DEFAULTS"
+
+    # ── Plank: the bottom dock ─────────────────────────────────────────────
+    #
+    # Plank is configured by /usr/local/bin/plank-setup, run from
+    # xfce-vnc-session: its preferences live in dconf, which needs the session
+    # D-Bus, and its launchers live under $HOME, which may be a fresh mount in
+    # a deployment. The autostart entry lets xfce4-session own the dock's
+    # lifetime so it comes back with the session.
+    #
+    # Orchis ships a matching Plank dock theme inside each GTK theme
+    # directory, but Plank looks for dock themes under its own data
+    # directory -- so copy it into place as `Orchis`.
+    log "Writing the Plank autostart entry and setup helper"
+    if [ -f "/usr/share/themes/${ORCHIS_THEME}/plank/dock.theme" ]; then
+        install -d /usr/share/plank/themes/Orchis
+        install -m 0644 "/usr/share/themes/${ORCHIS_THEME}/plank/dock.theme" \
+            /usr/share/plank/themes/Orchis/dock.theme
+    else
+        warn "Orchis ships no Plank dock theme; Plank will use its own default"
+    fi
+
+    install -d /etc/xdg/autostart
+    cat > /etc/xdg/autostart/plank.desktop <<'PLANKDESKTOP'
+[Desktop Entry]
+Type=Application
+Name=Plank
+Comment=Elegant, simple, clean dock
+Exec=plank
+Icon=plank
+Terminal=false
+Categories=Utility;
+OnlyShowIn=XFCE;
+PLANKDESKTOP
+
+    cat > /usr/local/bin/plank-setup <<'PLANKSETUP'
+#!/bin/sh
+# Configure the Plank dock on the session's X display. Written by install.sh and
+# run from xfce-vnc-session once the session D-Bus is up. Best-effort by
+# design: a dock that fails to configure must not keep the desktop from
+# starting, so every step is allowed to fail quietly.
+
+SCHEMA=net.launchpad.plank.dock.settings
+DOCK_PATH=/net/launchpad/plank/docks/dock1/
+LAUNCHERS="$HOME/.config/plank/dock1/launchers"
+
+# Launchers. Plank loads every *.dockitem in the launchers folder; an existing
+# item is left untouched so a user's own edits survive a restart. The set
+# mirrors what this desktop actually ships, and deliberately matches the
+# applications the web client's own dock used to launch -- the client's dock is
+# now controls-only, so Plank is where the apps are.
+if [ -d "$HOME" ]; then
+    mkdir -p "$LAUNCHERS" 2>/dev/null
+    for desktop in \
+        /usr/share/applications/thunar.desktop \
+        /usr/share/applications/xfce4-terminal.desktop \
+        /usr/share/applications/google-chrome.desktop \
+        /usr/share/applications/com.microsoft.VSCode.desktop \
+        /usr/share/applications/code.desktop \
+        /usr/local/share/applications/synaptic.desktop; do
+        [ -f "$desktop" ] || continue
+        item="$LAUNCHERS/$(basename "$desktop" .desktop).dockitem"
+        [ -e "$item" ] && continue
+        printf '[PlankDockItemPreferences]\nLauncher=file://%s\n' "$desktop" >"$item" 2>/dev/null
+    done
+fi
+
+# Dock preferences. The dock sits at the bottom, where the second XFCE panel
+# used to be (install.sh drops that panel from the panel defaults). Hiding is
+# `intelligent` so windows can use the screen edge behind the dock: Plank only
+# reserves space for itself in `none` mode, so every other mode leaves the edge
+# free and slides the dock away when a window would overlap it. Idempotent, so
+# it simply reasserts itself each start.
+if command -v gsettings >/dev/null 2>&1; then
+    gsettings set "$SCHEMA:$DOCK_PATH" theme         'Orchis'       2>/dev/null
+    gsettings set "$SCHEMA:$DOCK_PATH" position      'bottom'       2>/dev/null
+    gsettings set "$SCHEMA:$DOCK_PATH" alignment     'center'       2>/dev/null
+    gsettings set "$SCHEMA:$DOCK_PATH" hide-mode     'intelligent'  2>/dev/null
+    gsettings set "$SCHEMA:$DOCK_PATH" icon-size     40             2>/dev/null
+    gsettings set "$SCHEMA:$DOCK_PATH" zoom-enabled  true           2>/dev/null
+fi
+
+exit 0
+PLANKSETUP
+    chmod +x /usr/local/bin/plank-setup
+
+    log "Look and feel applied: ${ORCHIS_THEME} (compact), ${ORCHIS_ICONS}, floating panel, Plank dock"
+else
+    log "INSTALL_THEME=0: keeping the stock XFCE look"
+fi
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 9. Desktop applications
 #
 #    Chrome and VS Code are installed by default: they are what the dock
 #    exists for, and the dock hides an icon automatically when the binary is
@@ -338,7 +745,7 @@ check_bin synaptic synaptic
 # session anyway, so launching from the applications menu silently does
 # nothing (pkexec only works from a terminal, through its built-in text
 # prompt). Route the menu entry through the passwordless sudo configured in
-# section 9 instead: DISPLAY survives sudo's env_reset, and XAUTHORITY is
+# section 10 instead: DISPLAY survives sudo's env_reset, and XAUTHORITY is
 # forwarded explicitly so the root GUI lands on the user's own X server. The
 # override sits in /usr/local/share/applications, which XDG_DATA_DIRS ranks
 # ahead of /usr/share, so a synaptic package upgrade cannot revert it.
@@ -418,7 +825,7 @@ if [ "${INSTALL_DOCS:-0}" = "1" ]; then
 fi
 
 # ─────────────────────────────────────────────────────────────────────────────
-# 9. Unprivileged runtime user
+# 10. Unprivileged runtime user
 #
 #    The desktop runs as this user, not root. Xtigervnc and XFCE both want a
 #    writable $HOME for .Xauthority, ~/.vnc and D-Bus sockets, and running as
@@ -458,7 +865,7 @@ mkdir -p "$DESKTOP_HOME/Desktop" "$DESKTOP_HOME/Downloads" "$DESKTOP_HOME/.vnc"
 # so synaptic's goes through synaptic-root and needs no polkit either. The
 # 0755 mode is the executable half of XFCE 4.18's launcher-trust check; the
 # other half (a GVfs checksum attribute) is seeded at session start by
-# /usr/local/bin/trust-desktop-launchers, see section 10.
+# /usr/local/bin/trust-desktop-launchers, see section 11.
 #
 # VS Code's deb ships its launcher as com.microsoft.VSCode.desktop; accept the
 # older code.desktop name too so a pinned repo cannot silently lose the
@@ -539,7 +946,7 @@ chmod 0440 "/etc/sudoers.d/${DESKTOP_USER}"
 log "Runtime user: $DESKTOP_USER (uid $DESKTOP_UID), home $DESKTOP_HOME, passwordless sudo"
 
 # ─────────────────────────────────────────────────────────────────────────────
-# 10. X startup script
+# 11. X startup script
 #
 #    start-vnc runs this as an ordinary child process, so this script's own
 #    lifetime IS the session's lifetime. It ends by exec'ing the desktop,
@@ -586,6 +993,38 @@ export XDG_CURRENT_DESKTOP=XFCE
 # /tmp/gvfs-trust.log and must never keep the desktop from starting.
 /usr/local/bin/trust-desktop-launchers || true
 
+# Configure the Plank dock (launchers and dconf preferences). Requires the
+# session D-Bus set up above for the dconf write; see plank-setup for why this
+# runs here rather than at build time. Tolerant of failure so a dock that will
+# not configure never keeps the desktop from starting, and absent when the
+# image was built with INSTALL_THEME=0.
+[ -x /usr/local/bin/plank-setup ] && /usr/local/bin/plank-setup || true
+
+# Keep the floating panel centred on the live screen geometry. TigerVNC resizes
+# the screen whenever a client connects with a different window size, and the
+# panel only clamps its floating position on resize -- it never re-centres, so
+# a bar centred for 1920 would sit lopsided on any other width. Poll the
+# geometry and rewrite the position when it changes; the write lands in the
+# user's xfconf, exactly what dragging the panel would produce. The xfconf
+# default (written by install.sh) already matches the image's 1920x1080, so
+# this only matters after a client-driven resize. Absent with INSTALL_THEME=0,
+# where the stock panel is edge-to-edge and has nothing to centre.
+if [ -f /etc/xdg/xfce4/xfconf/xfce-perchannel-xml/xfce4-panel.xml ] \
+    && grep -q 'p=0;' /etc/xdg/xfce4/xfconf/xfce-perchannel-xml/xfce4-panel.xml; then
+    (
+        last_w=""
+        while :; do
+            w="$(xrandr 2>/dev/null | sed -n 's/.* current \([0-9]*\) x [0-9]*,.*/\1/p')"
+            if [ -n "$w" ] && [ "$w" != "$last_w" ]; then
+                last_w="$w"
+                xfconf-query -c xfce4-panel -p /panels/panel-1/position \
+                    -s "p=0;x=$((w / 2));y=22" -t string -n >/dev/null 2>&1 || true
+            fi
+            sleep 5
+        done
+    ) &
+fi
+
 # Bridge the X clipboard to the VNC clipboard in both directions.
 #   vncconfig  = VNC side  <-> X selections
 #   autocutsel = PRIMARY   <-> CLIPBOARD
@@ -623,7 +1062,7 @@ SESSION
 chmod +x /usr/local/bin/xfce-vnc-session
 
 # ─────────────────────────────────────────────────────────────────────────────
-# 11. Xtigervnc launcher
+# 12. Xtigervnc launcher
 #
 #    -SecurityTypes None is deliberate: the browser client has no VNC password
 #    field and sends an empty credential. If you enable VNC auth you must also
@@ -774,12 +1213,12 @@ STARTVNC
 chmod +x /usr/local/bin/start-vnc
 
 # ─────────────────────────────────────────────────────────────────────────────
-# 12. Wrap Xtigervnc's own launcher so `startvnc` behaves predictably
+# 13. Wrap Xtigervnc's own launcher so `startvnc` behaves predictably
 # ─────────────────────────────────────────────────────────────────────────────
 ln -sf /usr/local/bin/start-vnc /usr/local/bin/start-desktop
 
 # ─────────────────────────────────────────────────────────────────────────────
-# 13. Cleanup
+# 14. Cleanup
 # ─────────────────────────────────────────────────────────────────────────────
 log "Cleaning apt cache"
 apt-get clean
@@ -795,6 +1234,7 @@ cat <<SUMMARY
   Scripts written:
     /usr/local/bin/start-vnc        Xtigervnc + XFCE + websockify
     /usr/local/bin/xfce-vnc-session XFCE session run inside X
+$(if [ -x /usr/local/bin/plank-setup ]; then echo "    /usr/local/bin/plank-setup      Plank dock launchers + preferences"; fi)
 
   Defaults:
     display   ${VNC_DISPLAY}  ${VNC_GEOMETRY} depth ${VNC_DEPTH}
@@ -808,6 +1248,9 @@ $(if [ "${INSTALL_NODE:-1}" = "1" ]; then echo "    node       $(node --version)
 $(if have_app google-chrome; then echo "    chrome     $(google-chrome --version)"; fi)
 $(if have_app firefox;     then echo "    firefox    $(firefox --version)"; fi)
 $(if have_app code;        then echo "    code       $(code --version | head -1)"; fi)
+
+  Desktop look:
+$(if [ "${INSTALL_THEME:-1}" = "1" ]; then echo "    ${ORCHIS_THEME:-Orchis-Dark-Compact} (compact), ${ORCHIS_ICONS:-Tela-circle-dark} icons, floating panel, Plank dock"; else echo "    stock XFCE (INSTALL_THEME=0)"; fi)
 
   CMD ["start-vnc"]
 

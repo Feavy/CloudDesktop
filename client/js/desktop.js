@@ -294,6 +294,9 @@ if (isTouch) {
 applyAutoHide();
 
 // ── Dock magnification (desktop only) ──────────────────────
+//
+// The dock is a vertical strip, so proximity is measured along Y and each item
+// grows outward from its own vertical centre.
 
 if (!isTouch) {
   const MAG_RADIUS = 110;
@@ -301,10 +304,10 @@ if (!isTouch) {
   const dockItems  = dock.querySelectorAll('.dock-item');
 
   dock.addEventListener('mousemove', (e) => {
-    const mx = e.clientX;
+    const my = e.clientY;
     for (const item of dockItems) {
       const rect = item.getBoundingClientRect();
-      const dist = Math.abs(mx - (rect.left + rect.width / 2));
+      const dist = Math.abs(my - (rect.top + rect.height / 2));
       const mag  = dist < MAG_RADIUS
         ? 1 + (MAG_MAX - 1) * (1 - dist / MAG_RADIUS)
         : 1;
@@ -464,19 +467,6 @@ document.getElementById('topbar-theme').addEventListener('click', () => {
   setTheme(document.documentElement.getAttribute('data-theme') === 'dark' ? 'light' : 'dark');
 });
 
-// ── App launch helpers ──────────────────────────────────────
-
-async function launchApp(app) {
-  try {
-    await fetch('/api/desktop/launch', {
-      method: 'POST',
-      credentials: 'same-origin',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ app }),
-    });
-  } catch { /* silent */ }
-}
-
 // ── Server-side config (home dir, VNC endpoint, dock options) ───────────
 let SERVER_HOME = '/root';
 let SERVER_DESKTOP = '/root/Desktop';
@@ -500,23 +490,10 @@ const serverConfigReady = (async () => {
       const btnRestart = document.getElementById('btn-restart');
       if (btnRestart) btnRestart.hidden = !CAN_RESTART;
 
-      // Hide dock icons for apps this pod cannot launch
-      if (Array.isArray(cfg.canLaunch)) {
-        document.querySelectorAll('.dock-app').forEach((btn) => {
-          if (!cfg.canLaunch.includes(btn.dataset.app)) btn.hidden = true;
-        });
-      }
-
       if (!localStorage.getItem('upload-dest')) uploadDestInput.value = SERVER_DESKTOP;
     }
   } catch {}
 })();
-
-// ── Dock app icon clicks ────────────────────────────────────
-
-document.querySelectorAll('.dock-app').forEach((btn) => {
-  btn.addEventListener('click', () => launchApp(btn.dataset.app));
-});
 
 // ── Drag-and-drop uploads ───────────────────────────────────
 

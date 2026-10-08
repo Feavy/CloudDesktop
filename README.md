@@ -2,8 +2,8 @@
 
 A browser front-end for a **TigerVNC + XFCE** desktop that is already running in a
 Kubernetes pod. It is a noVNC replacement with a proper dock: mobile touch controls,
-clipboard sync, chunked file transfer, resolution switching, an app launcher and a
-window switcher.
+clipboard sync, chunked file transfer, resolution switching and a window switcher.
+Application launchers live in the desktop itself, in the Plank dock the images ship.
 
 <p align="center">
   <img src="screenshots/desktop.png" alt="Desktop web client" width="700">
@@ -132,14 +132,17 @@ Extras:
 | `EXTRA_LOCALES` | *(empty)* | Extra locales baked in at build time, space-separated (`--build-arg EXTRA_LOCALES="fr_FR.UTF-8 de_DE.UTF-8"`). Only `en_US.UTF-8` is generated otherwise; `start-vnc` also generates a missing session locale on the fly at startup |
 | `INSTALL_NODE` | `1` | Install Node.js from NodeSource (Ubuntu's own is 18, EOL). `Dockerfile.desktop` sets this to `0` |
 | `NODE_MAJOR` | `22` | NodeSource major version |
+| `INSTALL_THEME` | `1` | Theme the desktop with the [Orchis](https://github.com/vinceliuice/orchis-theme) GTK/xfwm4 theme in its **compact** flavour, matching Tela-circle icons, the Orchis wallpaper, a floating rounded panel and a Plank dock. `0` keeps the stock XFCE look |
+| `ORCHIS_THEME` | `Orchis-Dark-Compact` | Which built Orchis variant the session starts on. All three (`-Compact`, `-Light-Compact`, `-Dark-Compact`) are installed |
+| `ORCHIS_ICONS` | `Tela-circle-dark` | Icon theme to select (the Tela-circle source installs `Tela-circle`, `-light` and `-dark`) |
 
 Installed-by-default desktop apps (set `0` to slim the image down):
 
 | Variable | Default | Effect |
 |---|---|---|
-| `INSTALL_BROWSERS` | `1` | Google Chrome (the dock's Chrome icon) |
+| `INSTALL_BROWSERS` | `1` | Google Chrome (also a Plank dock launcher) |
 | `INSTALL_FIREFOX` | `1` | Firefox from Mozilla's APT repo, not Ubuntu's snap wrapper |
-| `INSTALL_VSCODE` | `1` | Visual Studio Code from Microsoft's APT repo (the dock's VS Code icon) |
+| `INSTALL_VSCODE` | `1` | Visual Studio Code from Microsoft's APT repo (also a Plank dock launcher) |
 | `INSTALL_DOCS` | `0` | LibreOffice Calc and Writer |
 | `DISPLAY_GEOMETRY` | `1920x1080` | Initial framebuffer size |
 | `VNC_PORT` | `5900` | Raw RFB port (loopback only) |
@@ -147,7 +150,34 @@ Installed-by-default desktop apps (set `0` to slim the image down):
 
 Docker icons for apps that aren't installed are hidden automatically — `canLaunch`
 in `/api/desktop/config` is resolved against `$PATH` at startup, so a minimal image
-simply shows a smaller dock.
+simply reports a shorter list.
+
+### Look and feel
+
+Both desktop images are themed at build time unless `INSTALL_THEME=0` is passed:
+
+- **Orchis**, compiled from a pinned upstream commit with `-s compact --tweaks
+  compact`. Both options are needed, and neither implies the other: `-s compact` is
+  the compact *size* variant (it is what actually densifies widget padding, margins
+  and font sizes), while `--tweaks compact` is upstream's compact *panel* tweak.
+  The theme ships GTK 2/3/4, xfwm4 window decorations and a Plank dock theme in one
+  directory. It is built from source rather than taken from Orchis' prebuilt release
+  tarball because those tarballs are generated without `--tweaks compact`.
+- **Tela-circle** icons, the matching set Orchis' own `index.theme` references.
+- The **Orchis wallpaper**, as the default backdrop.
+- A **floating, rounded top panel** — XFCE's stock second (bottom) panel is dropped,
+  and `xfwm4` compositing is switched on, since the rounded corners and the dock's
+  translucency are alpha and render as opaque black squares without it.
+- A **Plank dock** along the bottom, with launchers for the applications the image
+  ships. Because XFCE's panel no longer holds them, the web client's own dock is now
+  a controls-only strip down the left edge (upload, download, resolution,
+  fullscreen, window switcher, Ctrl+Alt+Del, restart, settings).
+
+All of it is applied through `/etc/xdg`, never a user's `$HOME`: xfconfd treats a
+channel XML file there as that channel's defaults for any user without an override,
+and a container session always starts from a fresh home. Plank's launchers and
+preferences are the exception — they live under `$HOME` and in dconf, so
+`/usr/local/bin/plank-setup` writes them at session start, from `xfce-vnc-session`.
 
 ### Running as a non-root user
 
@@ -371,9 +401,10 @@ All routes are unauthenticated; the reverse proxy gates them.
 | `POST` | `/api/desktop/rename` | Rename a file |
 | `WS` | `/websockify` | VNC stream (when `WS_URL` is unset) |
 
-The launcher allowlist is `terminal`, `firefox`, `chrome`, `filemanager` and `editor`,
-hardcoded in `server/routes/desktop.js`. Dock icons for apps missing from that list are
-hidden at runtime.
+The launcher allowlist is `terminal`, `synaptic`, `chrome`, `filemanager` and `vscode`,
+hardcoded in `server/routes/desktop.js`. The web client's dock no longer renders app
+icons (application launching moved to the desktop's Plank dock), but the endpoint and
+the `canLaunch` list in `/api/desktop/config` remain part of the API.
 
 ---
 
