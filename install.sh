@@ -22,6 +22,9 @@
 #                         which restores the man pages, docs and translation
 #                         catalogs the minimized ubuntu:24.04 image dpkg-strips
 #    INSTALL_TOOLS=0      skip the common Linux command-line tools
+#    INSTALL_THEME=0      skip the Orchis theme, Papirus icons and Plank dock
+#    ORCHIS_THEME         Orchis variant to apply (default: Orchis-Dark)
+#    ORCHIS_TAG           Orchis release tag to fetch (default: 2026-07-07)
 #    EXTRA_LOCALES        extra locales to bake in, space-separated, e.g.
 #                         "fr_FR.UTF-8 de_DE.UTF-8" (en_US.UTF-8 is always
 #                         generated; see also start-vnc's on-the-fly fallback)
@@ -539,7 +542,183 @@ chmod 0440 "/etc/sudoers.d/${DESKTOP_USER}"
 log "Runtime user: $DESKTOP_USER (uid $DESKTOP_UID), home $DESKTOP_HOME, passwordless sudo"
 
 # ─────────────────────────────────────────────────────────────────────────────
-# 10. X startup script
+# 10. Desktop look and feel: the Orchis theme, Papirus icons and a Plank dock
+#
+#     All cosmetic, so nothing here may fail the build: a theme that will not
+#     download should leave a plain desktop, not a broken image. Every step
+#     warns and carries on instead. Set INSTALL_THEME=0 to skip the lot.
+#
+#     Orchis is fetched as its prebuilt release tarball rather than built from
+#     source: the tarball is pinned by tag, needs no sassc/node toolchain, and
+#     unpacks in seconds. Each theme directory carries the GTK 2/3/4 styles,
+#     the xfwm4 window decorations and a Plank dock theme in one piece -- the
+#     whole set XFCE reads -- so a single download covers everything.
+# ─────────────────────────────────────────────────────────────────────────────
+if [ "${INSTALL_THEME:-1}" = "1" ]; then
+    log "Installing theme packages (Orchis, Papirus icons, Plank dock)"
+    apt-get install -y -qq --no-install-recommends \
+        papirus-icon-theme \
+        plank \
+        gtk2-engines-murrine \
+        gnome-themes-extra \
+        dconf-gsettings-backend \
+        libglib2.0-bin \
+        xz-utils
+
+    ORCHIS_TAG="${ORCHIS_TAG:-2026-07-07}"
+    ORCHIS_THEME="${ORCHIS_THEME:-Orchis-Dark}"
+    ORCHIS_URL="https://raw.githubusercontent.com/vinceliuice/orchis-theme/${ORCHIS_TAG}/release/Orchis.tar.xz"
+
+    # Guarded so Dockerfile.full, which re-runs this script on a base that
+    # already carries the theme, does not download and unpack it a second time.
+    if [ -d "/usr/share/themes/${ORCHIS_THEME}" ]; then
+        log "Orchis theme already present; skipping download"
+    else
+        log "Installing the Orchis theme (${ORCHIS_TAG})"
+        if curl -fsSL -o /tmp/orchis.tar.xz "$ORCHIS_URL" \
+            && tar -xJf /tmp/orchis.tar.xz -C /usr/share/themes; then
+            # The tarball carries variants this image has no use for: the
+            # -Compact menu variants, and the GNOME Shell, Cinnamon and
+            # Metacity styles, none of which XFCE reads. Dropping them keeps
+            # the layer small without touching the GTK/xfwm4/plank themes.
+            rm -rf /usr/share/themes/Orchis*-Compact \
+                   /usr/share/themes/Orchis*/gnome-shell \
+                   /usr/share/themes/Orchis*/cinnamon \
+                   /usr/share/themes/Orchis*/metacity-1
+        else
+            warn "Could not install the Orchis theme; the desktop keeps its stock look"
+        fi
+        rm -f /tmp/orchis.tar.xz
+    fi
+
+    if [ -d "/usr/share/themes/${ORCHIS_THEME}" ]; then
+        # Plank looks for dock themes under its own data directory, not under
+        # the GTK theme's. Orchis ships one inside each GTK theme; copy the
+        # matching one so `Theme=Orchis` in Plank resolves to it.
+        install -d /usr/share/plank/themes/Orchis
+        if [ -f "/usr/share/themes/${ORCHIS_THEME}/plank/dock.theme" ]; then
+            install -m 0644 "/usr/share/themes/${ORCHIS_THEME}/plank/dock.theme" \
+                /usr/share/plank/themes/Orchis/dock.theme
+        else
+            warn "Orchis ships no Plank dock theme; Plank will use its own default"
+        fi
+    fi
+
+    check_bin plank   plank
+    check_bin gsettings libglib2.0-bin
+
+    # Point XFCE at the theme and the icons. Both are only selected if the
+    # download above actually landed: with no Orchis on disk, naming it would
+    # leave XFCE on a theme that does not exist, which looks worse than the
+    # stock one. xfce4-settings ships the system default for the xsettings
+    # channel; rewriting the two values there makes them the default for every
+    # fresh session, and a container session is always fresh.
+    if [ -d "/usr/share/themes/${ORCHIS_THEME}" ]; then
+        XSETTINGS=/etc/xdg/xfce4/xfconf/xfce-perchannel-xml/xsettings.xml
+        if [ -f "$XSETTINGS" ]; then
+            log "Selecting ${ORCHIS_THEME} and Papirus-Dark in XFCE"
+            sed -i -E "s|(<property name=\"ThemeName\" type=\"string\" value=\")[^\"]*|\1${ORCHIS_THEME}|" "$XSETTINGS"
+            sed -i -E 's|(<property name="IconThemeName" type="string" value=")[^"]*|\1Papirus-Dark|' "$XSETTINGS"
+            grep -q "name=\"ThemeName\" type=\"string\" value=\"${ORCHIS_THEME}\"" "$XSETTINGS" \
+                || warn "xsettings.xml no longer declares Net/ThemeName; the GTK theme was not set"
+            grep -q 'name="IconThemeName" type="string" value="Papirus-Dark"' "$XSETTINGS" \
+                || warn "xsettings.xml no longer declares Net/IconThemeName; the icon theme was not set"
+        else
+            warn "$XSETTINGS not found; leaving the GTK and icon themes at their defaults"
+        fi
+
+        # xfwm4 reads its own channel, and unlike xsettings it has no packaged
+        # default file, so write one: without it a fresh session falls back to
+        # the unthemed "Default" window decorations. Compositing is switched on
+        # too -- Orchis' rounded window corners and the dock's transparency are
+        # alpha, and with no compositor they render as opaque black squares.
+        log "Writing the xfwm4 defaults (theme + compositing)"
+        cat > /etc/xdg/xfce4/xfconf/xfce-perchannel-xml/xfwm4.xml <<XFWM4XML
+<?xml version="1.0" encoding="UTF-8"?>
+
+<channel name="xfwm4" version="1.0">
+  <property name="general" type="empty">
+    <property name="theme" type="string" value="${ORCHIS_THEME}"/>
+    <property name="use_compositing" type="bool" value="true"/>
+  </property>
+</channel>
+XFWM4XML
+    else
+        warn "Orchis theme is not installed; leaving the stock theme and icons"
+    fi
+
+    # Plank is configured by /usr/local/bin/plank-setup, run from
+    # xfce-vnc-session: its preferences live in dconf, which needs a session
+    # D-Bus, and its launchers live under $HOME, which may be a fresh mount in
+    # a deployment. The autostart entry lets xfce4-session own the dock's
+    # lifetime so it comes back with the session.
+    log "Writing the Plank autostart entry and setup helper"
+    cat > /etc/xdg/autostart/plank.desktop <<'PLANKDESKTOP'
+[Desktop Entry]
+Type=Application
+Name=Plank
+Comment=Elegant, simple, clean dock
+Exec=plank
+Icon=plank
+Terminal=false
+Categories=Utility;
+OnlyShowIn=XFCE;
+PLANKDESKTOP
+
+    cat > /usr/local/bin/plank-setup <<'PLANKSETUP'
+#!/bin/sh
+# Configure the Plank dock on the session's X display. Written by install.sh and
+# run from xfce-vnc-session once the session D-Bus is up. Best-effort by
+# design: a dock that fails to configure must not keep the desktop from
+# starting, so every step is allowed to fail quietly.
+
+SCHEMA=net.launchpad.plank.dock.settings
+DOCK_PATH=/net/launchpad/plank/docks/dock1/
+LAUNCHERS="$HOME/.config/plank/dock1/launchers"
+
+# Launchers. Plank loads every *.dockitem in the launchers folder and only
+# falls back to its own default set (browser, mail client, media players) when
+# the folder is missing -- so creating it with the applications this desktop
+# actually ships keeps the dock useful. Existing files are left untouched so a
+# user's own edits survive a restart.
+if [ -d "$HOME" ]; then
+    mkdir -p "$LAUNCHERS" 2>/dev/null
+    for desktop in \
+        /usr/share/applications/thunar.desktop \
+        /usr/share/applications/xfce4-terminal.desktop \
+        /usr/share/applications/google-chrome.desktop \
+        /usr/share/applications/com.microsoft.VSCode.desktop \
+        /usr/share/applications/code.desktop \
+        /usr/local/share/applications/synaptic.desktop; do
+        [ -f "$desktop" ] || continue
+        item="$LAUNCHERS/$(basename "$desktop" .desktop).dockitem"
+        [ -e "$item" ] && continue
+        printf '[PlankDockItemPreferences]\nLauncher=file://%s\n' "$desktop" >"$item" 2>/dev/null
+    done
+fi
+
+# Dock preferences. The dock sits on the left edge rather than the usual bottom
+# one: the web client already draws its own floating bar across the bottom
+# centre of the view, and two docks in the same place read as a glitch. `none`
+# keeps it on screen so it is discoverable, and Plank reserves the edge so
+# windows do not maximise over it. Idempotent, so it simply reasserts itself
+# each start.
+if command -v gsettings >/dev/null 2>&1; then
+    gsettings set "$SCHEMA:$DOCK_PATH" theme         'Orchis'   2>/dev/null
+    gsettings set "$SCHEMA:$DOCK_PATH" position      'left'     2>/dev/null
+    gsettings set "$SCHEMA:$DOCK_PATH" alignment     'center'   2>/dev/null
+    gsettings set "$SCHEMA:$DOCK_PATH" hide-mode     'none'     2>/dev/null
+    gsettings set "$SCHEMA:$DOCK_PATH" icon-size     48         2>/dev/null
+    gsettings set "$SCHEMA:$DOCK_PATH" zoom-enabled  true       2>/dev/null
+fi
+
+exit 0
+PLANKSETUP
+    chmod +x /usr/local/bin/plank-setup
+fi
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 11. X startup script
 #
 #    start-vnc runs this as an ordinary child process, so this script's own
 #    lifetime IS the session's lifetime. It ends by exec'ing the desktop,
@@ -586,6 +765,13 @@ export XDG_CURRENT_DESKTOP=XFCE
 # /tmp/gvfs-trust.log and must never keep the desktop from starting.
 /usr/local/bin/trust-desktop-launchers || true
 
+# Configure the Plank dock (launchers and dconf preferences). Requires the
+# session D-Bus set up above for the dconf write; see plank-setup for why this
+# runs here rather than at build time. Tolerant of failure so a dock that will
+# not configure never keeps the desktop from starting, and absent when the
+# image was built with INSTALL_THEME=0.
+[ -x /usr/local/bin/plank-setup ] && /usr/local/bin/plank-setup || true
+
 # Bridge the X clipboard to the VNC clipboard in both directions.
 #   vncconfig  = VNC side  <-> X selections
 #   autocutsel = PRIMARY   <-> CLIPBOARD
@@ -623,7 +809,7 @@ SESSION
 chmod +x /usr/local/bin/xfce-vnc-session
 
 # ─────────────────────────────────────────────────────────────────────────────
-# 11. Xtigervnc launcher
+# 12. Xtigervnc launcher
 #
 #    -SecurityTypes None is deliberate: the browser client has no VNC password
 #    field and sends an empty credential. If you enable VNC auth you must also
@@ -774,12 +960,12 @@ STARTVNC
 chmod +x /usr/local/bin/start-vnc
 
 # ─────────────────────────────────────────────────────────────────────────────
-# 12. Wrap Xtigervnc's own launcher so `startvnc` behaves predictably
+# 13. Wrap Xtigervnc's own launcher so `startvnc` behaves predictably
 # ─────────────────────────────────────────────────────────────────────────────
 ln -sf /usr/local/bin/start-vnc /usr/local/bin/start-desktop
 
 # ─────────────────────────────────────────────────────────────────────────────
-# 13. Cleanup
+# 14. Cleanup
 # ─────────────────────────────────────────────────────────────────────────────
 log "Cleaning apt cache"
 apt-get clean
@@ -795,6 +981,7 @@ cat <<SUMMARY
   Scripts written:
     /usr/local/bin/start-vnc        Xtigervnc + XFCE + websockify
     /usr/local/bin/xfce-vnc-session XFCE session run inside X
+$(if [ -x /usr/local/bin/plank-setup ]; then echo "    /usr/local/bin/plank-setup      Plank dock launchers + preferences"; fi)
 
   Defaults:
     display   ${VNC_DISPLAY}  ${VNC_GEOMETRY} depth ${VNC_DEPTH}
@@ -808,6 +995,9 @@ $(if [ "${INSTALL_NODE:-1}" = "1" ]; then echo "    node       $(node --version)
 $(if have_app google-chrome; then echo "    chrome     $(google-chrome --version)"; fi)
 $(if have_app firefox;     then echo "    firefox    $(firefox --version)"; fi)
 $(if have_app code;        then echo "    code       $(code --version | head -1)"; fi)
+
+  Desktop theme:
+$(if [ -d "/usr/share/themes/${ORCHIS_THEME:-Orchis-Dark}" ]; then echo "    ${ORCHIS_THEME:-Orchis-Dark}, Papirus-Dark icons, Plank dock"; else echo "    (INSTALL_THEME=0; stock theme)"; fi)
 
   CMD ["start-vnc"]
 

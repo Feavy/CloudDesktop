@@ -123,6 +123,18 @@ no `Xvnc` either. It waits for the display to accept connections, then starts th
 session, and treats the session's death as fatal so a crashed desktop restarts
 the pod rather than leaving a grey screen served over a healthy WebSocket.
 
+The desktop is themed at build time with the
+[Orchis](https://github.com/vinceliuice/orchis-theme) theme — rounded window corners,
+applied to both GTK and xfwm4 — plus Papirus-Dark icons and a Plank dock. Orchis is
+fetched as its pinned release tarball rather than built from source, so no `sassc` and no
+extra toolchain are involved. The xfwm4 defaults also switch on compositing, because the
+rounded corners and the dock's translucency are alpha and render as opaque black squares
+without it. The dock sits on the **left** edge rather than the bottom: the web client
+already draws its own floating bar across the bottom centre of the view, and a second
+dock in the same place reads as a glitch. All of this is best-effort — a failed theme
+download leaves the stock look rather than failing the build — and `INSTALL_THEME=0`
+skips it entirely.
+
 Extras:
 
 | Variable | Default | Effect |
@@ -141,6 +153,9 @@ Installed-by-default desktop apps (set `0` to slim the image down):
 | `INSTALL_FIREFOX` | `1` | Firefox from Mozilla's APT repo, not Ubuntu's snap wrapper |
 | `INSTALL_VSCODE` | `1` | Visual Studio Code from Microsoft's APT repo (the dock's VS Code icon) |
 | `INSTALL_DOCS` | `0` | LibreOffice Calc and Writer |
+| `INSTALL_THEME` | `1` | Orchis theme (rounded windows), Papirus-Dark icons and the Plank dock |
+| `ORCHIS_THEME` | `Orchis-Dark` | Orchis variant to apply (`Orchis`, `Orchis-Light`, `Orchis-Dark`) |
+| `ORCHIS_TAG` | `2026-07-07` | Orchis release tag the theme tarball is fetched from |
 | `DISPLAY_GEOMETRY` | `1920x1080` | Initial framebuffer size |
 | `VNC_PORT` | `5900` | Raw RFB port (loopback only) |
 | `VNC_WS_PORT` | `6900` | websockify port |
