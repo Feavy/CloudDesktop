@@ -1,6 +1,7 @@
 import RFB from '/vendor/novnc/core/rfb.js';
 import { notify, init as initNotifications } from '/js/notifications.js?cv=%CACHE_VERSION%';
 import { createMobileKeyboard } from '/js/mobile-keyboard.js?cv=%CACHE_VERSION%';
+import { initAppDock, hideAppDock, setAppDockAutoHide, iconUrl } from '/js/appdock.js?cv=%CACHE_VERSION%';
 
 const statusOverlay = document.getElementById('status-overlay');
 const statusText    = document.getElementById('status-text');
@@ -298,6 +299,9 @@ dockTrigger.addEventListener('touchstart', (e) => {
 // listener would never run. Respects the pinned (auto-hide off) setting.
 function hideDockForCanvas() {
   if (dockAutoHide && dock.classList.contains('visible')) hideDock();
+  // The app dock hides under the same rule (it keeps its own auto-hide
+  // state; a pinned dock stays put).
+  hideAppDock();
 }
 vncContainer.addEventListener('pointerdown', hideDockForCanvas, { capture: true });
 vncContainer.addEventListener('touchstart', hideDockForCanvas,
@@ -322,11 +326,12 @@ applyAutoHide();
 if (!isTouch) {
   const MAG_RADIUS = 110;
   const MAG_MAX    = 1.4;
-  const dockItems  = dock.querySelectorAll('.dock-item');
 
   dock.addEventListener('mousemove', (e) => {
     const my = e.clientY;
-    for (const item of dockItems) {
+    // Live query, not a snapshot: the app dock's section is re-rendered as
+    // applications launch and close.
+    for (const item of dock.querySelectorAll('.dock-item')) {
       const rect = item.getBoundingClientRect();
       const dist = Math.abs(my - (rect.top + rect.height / 2));
       const mag  = dist < MAG_RADIUS
@@ -581,6 +586,8 @@ autohideBtn.addEventListener('click', () => {
   localStorage.setItem('dock-autohide', dockAutoHide ? 'on' : 'off');
   autohideBtn.textContent = dockAutoHide ? 'On' : 'Off';
   applyAutoHide();
+  // The app dock follows the same setting.
+  setAppDockAutoHide(dockAutoHide);
 });
 
 const topbarBtn = document.getElementById('settings-topbar');
@@ -697,8 +704,14 @@ async function refreshWindowList() {
     windowListItems.innerHTML = data.windows.map(w => {
       const ico = windowIcon(w.title);
       const safeTitle = w.title.replace(/</g, '&lt;').replace(/>/g, '&gt;');
+      // The generic glyph renders underneath; when the window maps to an
+      // application its resolved theme icon is layered over it (an image
+      // that fails to load just reveals the glyph).
+      const img = w.appId
+        ? `<img src="${iconUrl(w.appId, 32)}" alt="" loading="lazy">`
+        : '';
       return `<button class="window-entry" data-wid="${w.id}">
-        <span class="window-entry-icon">${iconSvgs[ico]}</span>
+        <span class="window-entry-icon">${iconSvgs[ico]}${img}</span>
         <span class="window-entry-title">${safeTitle}</span>
       </button>`;
     }).join('');
@@ -734,9 +747,17 @@ document.addEventListener('click', (e) => {
   }
 });
 
+// ── App dock (bottom) ───────────────────────────────────────
+// The browser-side replacement for the Plank dock: pinned + running
+// applications on a bottom-edge dock, and the applications grid. The
+// appdock module owns its own polling, pins and menus; it only needs the
+// device flags and the stamped cache version for icon URLs.
+initAppDock({ isTouch, isMobile, cacheVersion: APP_VERSION });
+
 // ── Modal dismiss: backdrop click & Escape ──────────────────
 
-const allModals = [resolutionModal, settingsModal, uploadModal, dirModal, filebrowserModal];
+const allModals = [resolutionModal, settingsModal, uploadModal, dirModal, filebrowserModal,
+  document.getElementById('apps-modal')];
 
 allModals.forEach((modal) => {
   modal.addEventListener('click', (e) => { if (e.target === modal) modal.hidden = true; });

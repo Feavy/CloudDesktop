@@ -14,6 +14,7 @@
   <link rel="icon" type="image/png" sizes="192x192" href="/icon-192.png?cv=%CACHE_VERSION%">
   <title>CloudDesktop</title>
   <link rel="stylesheet" href="/css/desktop.css?cv=%CACHE_VERSION%">
+  <link rel="stylesheet" href="/css/appdock.css?cv=%CACHE_VERSION%">
   <link rel="stylesheet" href="/css/notifications.css?cv=%CACHE_VERSION%">
 </head>
 <body>
@@ -137,9 +138,9 @@
   <div id="dock-trigger" class="dock-trigger"></div>
 
   <!-- ═══════════════════════════════════════ Dock ═══════════════════════════════════════
-       Browser-side controls only. Application launchers live in the desktop's own
-       Plank dock, which owns the bottom edge, so this strip stays out of its way
-       on the left. -->
+       Browser-side controls only, on the left edge. Application launching
+       lives in the app dock at the bottom of the page (see appdock.*), which
+       replaced the desktop's Plank dock. -->
   <div id="dock" class="dock" role="toolbar" aria-label="Desktop controls">
 
     <!-- ── Utilities ── -->
@@ -225,6 +226,13 @@
 
   </div><!-- /dock -->
 
+  <!-- ═══════════════════════════════════════ App dock ═══════════════════════════════════════
+       Bottom-edge application launcher, rendered by the browser — the
+       replacement for the Plank dock the desktop images used to ship.
+       Pinned and running applications are rendered by appdock.js. -->
+  <div id="app-dock-trigger" class="app-dock-trigger"></div>
+  <div id="app-dock" class="app-dock" role="toolbar" aria-label="Applications"></div>
+
   <!-- Window switcher popup -->
   <div id="window-list" class="window-list" hidden>
     <div class="window-list-header">Open Windows</div>
@@ -232,6 +240,30 @@
       <div class="window-list-empty">No windows open</div>
     </div>
   </div>
+
+  <!-- Applications view: every installed app in a grid, with the running
+       ones marked; the entry point is the grid button in the app dock. -->
+  <div id="apps-modal" class="modal" hidden>
+    <div class="modal-card apps-card">
+      <div class="apps-head">
+        <h3>Applications</h3>
+        <button id="apps-close" class="apps-close-btn" title="Close" aria-label="Close">
+          <svg viewBox="0 0 16 16" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><line x1="3" y1="3" x2="13" y2="13"/><line x1="13" y1="3" x2="3" y2="13"/></svg>
+        </button>
+      </div>
+      <input type="text" id="apps-search" class="apps-search" placeholder="Search applications…" spellcheck="false" autocomplete="off">
+      <div class="apps-filters">
+        <button class="apps-chip active" id="apps-filter-all">All</button>
+        <button class="apps-chip" id="apps-filter-running">Running</button>
+      </div>
+      <div id="apps-grid" class="apps-grid"></div>
+      <div id="apps-empty" class="apps-empty" hidden>No applications found</div>
+    </div>
+  </div>
+
+  <!-- Floating context menu for app icons (dock + grid): focus a specific
+       window, launch a new instance, pin/unpin, close the app's windows. -->
+  <div id="app-context-menu" class="app-ctx-menu" hidden></div>
 
   <!-- ═══════════════════════════════════════ Modals ═══════════════════════════════════════ -->
 

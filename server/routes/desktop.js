@@ -6,6 +6,7 @@ const path = require('path');
 const fs = require('fs');
 const multer = require('multer');
 const config = require('../config');
+const apps = require('../apps');
 
 const router = express.Router();
 
@@ -65,9 +66,9 @@ const storage = multer.diskStorage({
 });
 const upload = multer({ storage, limits: { fileSize: 100 * 1024 * 1024 } });
 
-// Allowlisted apps for the launch endpoint. The web client's dock no longer
-// offers these (application launchers moved to the desktop's Plank dock), but
-// the endpoint stays part of the HTTP API for other consumers.
+// Allowlisted apps for the launch endpoint. The web client's app dock
+// launches from installed .desktop entries instead (see routes/apps.js);
+// this endpoint stays part of the HTTP API for other consumers.
 const ALLOWED_APPS = {
   filemanager: { cmd: 'thunar', args: [] },
   terminal: { cmd: 'xfce4-terminal', args: [] },
@@ -79,10 +80,9 @@ const ALLOWED_APPS = {
 };
 
 // Report which allowlisted apps are actually installed in this pod, as
-// `/config.canLaunch`. Kept for API consumers even though the current web
-// client's dock no longer renders app icons (the desktop's Plank dock owns
-// application launching). Resolved once at startup because the package set is
-// static.
+// `/config.canLaunch`. Kept for API consumers; the current web client
+// launches through the .desktop registry in routes/apps.js instead.
+// Resolved once at startup because the package set is static.
 const availableApps = Object.entries(ALLOWED_APPS)
   .filter(([, app]) => {
     const found = (process.env.PATH || '').split(':').some((dir) => {
@@ -396,25 +396,68 @@ router.post('/launch', (req, res) => {
 });
 
 // GET /api/desktop/windows — list open X11 windows
-router.get('/windows', (_req, res) => {
-  execFile('wmctrl', ['-l', '-p'], { env: X_ENV }, (err, stdout) => {
-    if (err) {
-      return res.json({ windows: [] });
-    }
-    const windows = [];
-    for (const line of stdout.trim().split('\n')) {
-      if (!line) continue;
-      // Format: 0x00c0002c  0  1234  hostname Title here
-      const m = line.match(/^(0x[\da-f]+)\s+(-?\d+)\s+(\d+)\s+\S+\s+(.+)$/i);
-      if (!m) continue;
-      const desktop = parseInt(m[2], 10);
-      const title = m[4].trim();
-      // Skip the root desktop window and negative desktop entries
-      if (desktop < 0 || title === 'Desktop') continue;
-      windows.push({ id: m[1], pid: parseInt(m[3], 10), title });
-    }
-    res.json({ windows });
+//
+// Two wmctrl calls, correlated by window id: `-l -p` for pid + title (its
+// column layout is unambiguous) and `-l -x` for the WM_CLASS, which is what
+// ties a window back to the application that owns it for the dock's running
+// indicators.
+router.get('/windows', async (_req, res) => {
+  const execP = (args) => new Promise((resolve) => {
+    execFile('wmctrl', args, { env: X_ENV }, (err, stdout) => resolve(err ? '' : String(stdout)));
   });
+
+  const [basic, withClass] = await Promise.all([
+    execP(['-l', '-p']),
+    execP(['-l', '-x']),
+  ]);
+
+  // Titles first: they anchor the -x parse below.
+  const titleById = new Map();
+  const windows = [];
+  for (const line of basic.trim().split('\n')) {
+    if (!line) continue;
+    // Format: 0x00c0002c  0  1234  hostname Title here
+    const m = line.match(/^(0x[\da-f]+)\s+(-?\d+)\s+(\d+)\s+\S+\s+(.+)$/i);
+    if (!m) continue;
+    const desktop = parseInt(m[2], 10);
+    const title = m[4].trim();
+    // Skip the root desktop window and negative desktop entries
+    if (desktop < 0 || title === 'Desktop') continue;
+    titleById.set(m[1].toLowerCase(), title);
+    windows.push({ id: m[1], pid: parseInt(m[3], 10), title, wmClass: null, appId: null });
+  }
+
+  const classById = new Map();
+  for (const line of withClass.split('\n')) {
+    const idm = line.match(/^(0x[\da-f]+)\s/i);
+    if (!idm) continue;
+    const id = idm[1].toLowerCase();
+
+    // wmctrl prints the WM_CLASS as `instance.Class` right before the
+    // title. With the title known from the -p parse, the class token is
+    // simply the last token ahead of it — which also survives builds that
+    // drop the hostname column.
+    const title = titleById.get(id);
+    let wmClass = null;
+    if (title && line.endsWith(title)) {
+      const head = line.slice(0, line.length - title.length).trim().split(/\s+/);
+      const cand = head[head.length - 1];
+      if (cand && cand.includes('.') && !/^-?\d+$/.test(cand)) wmClass = cand;
+    }
+    if (!wmClass) {
+      // Fallback to the canonical column layout: id desktop host class title
+      const m = line.match(/^(0x[\da-f]+)\s+(-?\d+)\s+(\S+)\s+(\S+)\s+(.*)$/i);
+      if (m) wmClass = /\./.test(m[4]) ? m[4] : (/\./.test(m[3]) ? m[3] : null);
+    }
+    if (wmClass) classById.set(id, wmClass);
+  }
+
+  for (const win of windows) {
+    win.wmClass = classById.get(win.id.toLowerCase()) || null;
+    win.appId = apps.matchWindow({ wmClass: win.wmClass, pid: win.pid, title: win.title }) || null;
+  }
+
+  res.json({ windows });
 });
 
 // POST /api/desktop/windows/focus — raise and focus a window
@@ -426,6 +469,22 @@ router.post('/windows/focus', (req, res) => {
   execFile('wmctrl', ['-i', '-a', id], { env: X_ENV }, (err) => {
     if (err) {
       return res.status(500).json({ error: 'Failed to focus window' });
+    }
+    res.json({ ok: true });
+  });
+});
+
+// POST /api/desktop/windows/close — ask a window to close (graceful, like
+// its own close button: the WM gets a _NET_CLOSE_WINDOW, the app may still
+// show an "unsaved work" dialog).
+router.post('/windows/close', (req, res) => {
+  const { id } = req.body;
+  if (!id || typeof id !== 'string' || !/^0x[\da-f]+$/i.test(id)) {
+    return res.status(400).json({ error: 'Invalid window id' });
+  }
+  execFile('wmctrl', ['-i', '-c', id], { env: X_ENV }, (err) => {
+    if (err) {
+      return res.status(500).json({ error: 'Failed to close window' });
     }
     res.json({ ok: true });
   });

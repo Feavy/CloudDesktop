@@ -3,7 +3,9 @@
 A browser front-end for a **TigerVNC + XFCE** desktop that is already running in a
 Kubernetes pod. It is a noVNC replacement with a proper dock: mobile touch controls,
 clipboard sync, chunked file transfer, resolution switching and a window switcher.
-Application launchers live in the desktop itself, in the Plank dock the images ship.
+The dock itself is rendered by the browser — a bottom-edge app dock with pinned and
+running applications plus a full applications grid — replacing the Plank dock the
+desktop images used to ship.
 
 <p align="center">
   <img src="screenshots/desktop.png" alt="Desktop web client" width="700">
@@ -38,9 +40,10 @@ no secret material to manage.
 ## What was kept
 
 Clipboard sync, chunked file upload/download with pause and resume, resolution
-switching via `xrandr`, the app launcher, the window switcher, CPU/RAM/disk stats, the
+switching via `xrandr`, the window switcher, CPU/RAM/disk stats, the
 PWA install path, and the mobile touch experience (virtual trackpad cursor, on-screen
-keyboard, pinch zoom, auto-fit resolution).
+keyboard, pinch zoom, auto-fit resolution). The app launcher came back as a
+browser-side app dock (see [The app dock](#the-app-dock)).
 
 Two small fixes came out of the rewrite:
 
@@ -132,7 +135,7 @@ Extras:
 | `EXTRA_LOCALES` | *(empty)* | Extra locales baked in at build time, space-separated (`--build-arg EXTRA_LOCALES="fr_FR.UTF-8 de_DE.UTF-8"`). Only `en_US.UTF-8` is generated otherwise; `start-vnc` also generates a missing session locale on the fly at startup |
 | `INSTALL_NODE` | `1` | Install Node.js from NodeSource (Ubuntu's own is 18, EOL). `Dockerfile.desktop` sets this to `0` |
 | `NODE_MAJOR` | `22` | NodeSource major version |
-| `INSTALL_THEME` | `1` | Theme the desktop with the [Orchis](https://github.com/vinceliuice/orchis-theme) GTK/xfwm4 theme in its **compact** flavour, matching Tela-circle icons, the Orchis wallpaper, a docked edge-to-edge panel and a Plank dock. `0` keeps the stock XFCE look |
+| `INSTALL_THEME` | `1` | Theme the desktop with the [Orchis](https://github.com/vinceliuice/orchis-theme) GTK/xfwm4 theme in its **compact** flavour, matching Tela-circle icons, the Orchis wallpaper and a docked edge-to-edge panel. `0` keeps the stock XFCE look |
 | `ORCHIS_THEME` | `Orchis-Dark-Compact` | Which built Orchis variant the session starts on. All three (`-Compact`, `-Light-Compact`, `-Dark-Compact`) are installed |
 | `ORCHIS_ICONS` | `Tela-circle-dark` | Icon theme to select (the Tela-circle source installs `Tela-circle`, `-light` and `-dark`) |
 
@@ -140,9 +143,9 @@ Installed-by-default desktop apps (set `0` to slim the image down):
 
 | Variable | Default | Effect |
 |---|---|---|
-| `INSTALL_BROWSERS` | `1` | Google Chrome (also a Plank dock launcher) |
+| `INSTALL_BROWSERS` | `1` | Google Chrome (also a default pin in the web client's app dock) |
 | `INSTALL_FIREFOX` | `1` | Firefox from Mozilla's APT repo, not Ubuntu's snap wrapper |
-| `INSTALL_VSCODE` | `1` | Visual Studio Code from Microsoft's APT repo (also a Plank dock launcher) |
+| `INSTALL_VSCODE` | `1` | Visual Studio Code from Microsoft's APT repo (also a default pin in the web client's app dock) |
 | `INSTALL_DOCS` | `0` | LibreOffice Calc and Writer |
 | `DISPLAY_GEOMETRY` | `1920x1080` | Initial framebuffer size |
 | `VNC_PORT` | `5900` | Raw RFB port (loopback only) |
@@ -160,35 +163,59 @@ Both desktop images are themed at build time unless `INSTALL_THEME=0` is passed:
   compact`. Both options are needed, and neither implies the other: `-s compact` is
   the compact *size* variant (it is what actually densifies widget padding, margins
   and font sizes), while `--tweaks compact` is upstream's compact *panel* tweak.
-  The theme ships GTK 2/3/4, xfwm4 window decorations and a Plank dock theme in one
-  directory. It is built from source rather than taken from Orchis' prebuilt release
-  tarball because those tarballs are generated without `--tweaks compact`.
+  The theme ships GTK 2/3/4 and xfwm4 window decorations in one directory. It is
+  built from source rather than taken from Orchis' prebuilt release tarball because
+  those tarballs are generated without `--tweaks compact`.
 - **Tela-circle** icons, the matching set Orchis' own `index.theme` references.
 - The **Orchis wallpaper**, as the default backdrop.
 - A **docked, edge-to-edge top panel**. XFCE's stock second (bottom) panel is
-  dropped, and the surviving bar keeps XFCE's own geometry — `p=6;x=0;y=0` with
-  100% length — so it sits flush against the top and both sides. That is what
-  upstream's `--tweaks compact` means by "no floating panel variant"; the bar is
-  deliberately *not* floated or rounded.
-- A **Plank dock** along the bottom, with launchers for the applications the image
-  ships. Because XFCE's panel no longer holds them, the web client's own dock is
-  now a controls-only strip down the left edge (upload, download, resolution,
-  fullscreen, window switcher, Ctrl+Alt+Del, restart, settings).
+  dropped — the dock is the web client's, rendered by the browser (see
+  [The app dock](#the-app-dock)) — and the surviving bar keeps XFCE's own geometry —
+  `p=6;x=0;y=0` with 100% length — so it sits flush against the top and both sides.
+  That is what upstream's `--tweaks compact` means by "no floating panel variant";
+  the bar is deliberately *not* floated or rounded.
 
-`xfwm4` compositing is switched on (Plank's dock background is alpha, and renders
-as an opaque black block without it), and `show_dock_shadow` is switched **off**.
-Plank asks for a window the full width of the monitor and 118px tall even though
-it only paints its icon bar, so the drop shadow xfwm4 draws around dock windows
-shows up as a translucent band floating across the bottom of the screen — reading
-as a panel that is not there. With the shadow off, Plank's dock is visible and its
-oversized, fully transparent window is not. This also drops the shadow under the
-panel, which suits a bar that is flush with the screen edge.
+`xfwm4` compositing is switched on (the panel's background is alpha, and renders
+as an opaque black block without it), and `show_dock_shadow` is switched **off**:
+the docked panel is a dock-type window, and the drop shadow xfwm4 draws around
+dock windows shows up as a translucent band floating below the full-width bar —
+reading as a panel that is not there.
 
 All of it is applied through `/etc/xdg`, never a user's `$HOME`: xfconfd treats a
 channel XML file there as that channel's defaults for any user without an override,
-and a container session always starts from a fresh home. Plank's launchers and
-preferences are the exception — they live under `$HOME` and in dconf, so
-`/usr/local/bin/plank-setup` writes them at session start, from `xfce-vnc-session`.
+and a container session always starts from a fresh home.
+
+### The app dock
+
+The dock lives in the web client, at the bottom edge of the browser page — the
+position the Plank dock used to occupy on the remote desktop. It auto-hides with
+the same Setting (and the same trigger pill pattern) as the left-edge control
+strip, and shows:
+
+- **Pinned applications**, in pin order. A fresh deployment seeds sensible
+  defaults (terminal, file manager, browser, VS Code…) from what the image
+  actually ships.
+- **Running but unpinned applications**, after a separator, so a window you
+  opened from elsewhere is always one click away.
+- An **Apps** button that opens the applications grid: every installed
+  application as a tile, with search, an *All / Running* filter and a dot on
+  every running app.
+
+Running state comes from `wmctrl`'s window list: each window's `WM_CLASS` is
+matched against the application registry (`StartupWMClass`, the `Exec` basename
+and the process image name, exact before substring), so a dock icon knows how
+many windows an application has open. Clicking an icon focuses the window (a
+second click cycles to the next window of the same app); right-click or
+long-press opens a menu with per-window focus, *Open New Window*, *Pin to Dock* /
+*Unpin from Dock*, and *Close All Windows*.
+
+Pins are stored server-side in `~/.config/clouddesktop/dock.json` so every
+browser and device sees the same dock; if that API is unreachable the client
+falls back to `localStorage`. Launching goes through `gtk-launch` (or a manual
+parse of the `.desktop` file's `Exec=` line), so what runs is always an
+installed application's own launcher — never a command sent from the browser.
+Icons are resolved from the desktop's icon theme (`IconThemeName` from the
+xfconf xsettings defaults, falling back to hicolor) and served by the API.
 
 ### Running as a non-root user
 
@@ -401,8 +428,13 @@ All routes are unauthenticated; the reverse proxy gates them.
 | `POST` | `/api/desktop/resolution` | Set the X display size, generating a modeline with `cvt` if needed |
 | `POST` | `/api/desktop/restart` | Run `RESTART_CMD`; `501` if unconfigured |
 | `GET` | `/api/desktop/stats` | CPU / RAM / disk |
-| `GET` | `/api/desktop/windows` | List open X windows |
+| `GET` | `/api/desktop/windows` | List open X windows (with `WM_CLASS` and the matched application id) |
 | `POST` | `/api/desktop/windows/focus` | Raise and focus a window |
+| `POST` | `/api/desktop/windows/close` | Ask a window to close (`wmctrl -ic`) |
+| `GET` | `/api/desktop/apps` | Installed applications (XDG `.desktop` entries) |
+| `GET` | `/api/desktop/apps/icon/:id` | Resolved theme icon for an application (`?size=48`) |
+| `POST` | `/api/desktop/apps/launch` | Launch an installed application by id |
+| `GET`/`PUT` | `/api/desktop/apps/pins` | The app dock's pinned application ids |
 | `POST` | `/api/desktop/launch` | Start an allowlisted app |
 | `POST` | `/api/desktop/upload` | Single-shot upload |
 | `POST` | `/api/desktop/upload/init` `/chunk` `/pause` `/resume` | Chunked upload |
@@ -413,9 +445,9 @@ All routes are unauthenticated; the reverse proxy gates them.
 | `WS` | `/websockify` | VNC stream (when `WS_URL` is unset) |
 
 The launcher allowlist is `terminal`, `synaptic`, `chrome`, `filemanager` and `vscode`,
-hardcoded in `server/routes/desktop.js`. The web client's dock no longer renders app
-icons (application launching moved to the desktop's Plank dock), but the endpoint and
-the `canLaunch` list in `/api/desktop/config` remain part of the API.
+hardcoded in `server/routes/desktop.js`. The web client's app dock launches through
+the `.desktop` registry (`/api/desktop/apps*`) instead, but this endpoint and the
+`canLaunch` list in `/api/desktop/config` remain part of the API.
 
 ---
 

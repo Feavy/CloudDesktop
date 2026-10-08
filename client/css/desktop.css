@@ -219,11 +219,10 @@ body.mobile-fullscreen #vnc-container { inset: 0 !important; }
 /* ═══════════════════════════════════════════════════════════
    Dock — vertical control strip on the left edge
 
-   The desktop's own Plank dock owns the bottom edge, so this
-   browser-side strip is vertical down the left instead. It holds
-   only the web client's controls (upload, download, resolution,
-   fullscreen, window switcher, Ctrl+Alt+Del, restart, settings);
-   the application launchers moved to Plank.
+   This strip holds only the web client's controls (upload, download,
+   resolution, fullscreen, window switcher, Ctrl+Alt+Del, restart,
+   settings). Application launching lives in the app dock at the bottom
+   of the page (appdock.css), which replaced the desktop's Plank dock.
    ═══════════════════════════════════════════════════════════ */
 .dock {
   position: fixed;
@@ -328,8 +327,7 @@ body.mobile-fullscreen #vnc-container { inset: 0 !important; }
 .dock-util:active { filter: brightness(0.82); }
 
 /* ── Window switcher popup ──
-   Opens beside the dock on the left rather than centred at the bottom, which
-   is now Plank's edge. */
+   Opens beside the dock on the left; the bottom edge is the app dock's. */
 .window-list {
   position: fixed;
   top: 50%;
@@ -843,8 +841,8 @@ body.mobile-fullscreen #vnc-container { inset: 0 !important; }
   }
 
   /* ── Dock: vertical control strip on the left, same as desktop ──
-     Kept on the left rather than the bottom so it never covers Plank, which
-     owns the bottom edge of the remote desktop. */
+     Kept on the left rather than the bottom so it never covers the app
+     dock, which owns the bottom edge of the page. */
   .dock {
     left: 0;
     top: 50%;

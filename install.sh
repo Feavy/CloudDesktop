@@ -22,8 +22,8 @@
 #                         which restores the man pages, docs and translation
 #                         catalogs the minimized ubuntu:24.04 image dpkg-strips
 #    INSTALL_TOOLS=0      skip the common Linux command-line tools
-#    INSTALL_THEME=0      keep the stock XFCE look (no Orchis, no Tela icons,
-#                         no Plank dock); see section 8
+#    INSTALL_THEME=0      keep the stock XFCE look (no Orchis, no Tela icons);
+#                         see section 8
 #    ORCHIS_THEME         Orchis variant to apply (default: Orchis-Dark-Compact)
 #    ORCHIS_ICONS         icon theme to apply (default: Tela-circle-dark)
 #    EXTRA_LOCALES        extra locales to bake in, space-separated, e.g.
@@ -327,7 +327,10 @@ fi
 #    The stock XFCE desktop is functional but spartan (Greybird widgets, flat
 #    grey panel, square window corners). This section gives it the Orchis
 #    theme (github.com/vinceliuice/orchis-theme) in its *compact* flavour,
-#    matched icons, wallpaper, a docked panel and a Plank dock.
+#    matched icons, wallpaper and a docked panel. The dock itself is the web
+#    client's: a bottom-edge app dock rendered by the browser (it lists
+#    pinned and running applications and replaced the Plank dock earlier
+#    revisions of this image shipped).
 #
 #    "Compact tweaks" means two independent upstream options, and both are
 #    needed -- neither implies the other:
@@ -368,13 +371,13 @@ if [ "${INSTALL_THEME:-1}" = "1" ]; then
     # sassc compiles the SCSS; murrine and gnome-themes-extra provide the GTK2
     # engines the GTK2 themes (and therefore Synaptic) need; xz-utils unpacks
     # the source tarball; gtk-update-icon-cache is what Tela's install.sh
-    # invokes; dconf-gsettings-backend + libglib2.0-bin give gsettings, which
-    # plank-setup uses at session start.
-    log "Installing theme packages (Orchis build deps, Tela icons, Plank)"
+    # invokes; dconf-gsettings-backend + libglib2.0-bin provide the GSettings
+    # storage GTK applications use for their own settings.
+    log "Installing theme packages (Orchis build deps, Tela icons)"
     apt-get install -y -qq --no-install-recommends \
         sassc gtk2-engines-murrine gnome-themes-extra \
         xz-utils gtk-update-icon-cache \
-        plank dconf-gsettings-backend libglib2.0-bin
+        dconf-gsettings-backend libglib2.0-bin
 
     # ── Orchis, built from source with both compact options ────────────────
     #
@@ -493,17 +496,13 @@ XSETTINGS
 
     # Window decorations come from their own channel. xfwm4 reads a matching
     # xfwm4 theme out of the Orchis theme directory, and compositing is
-    # switched on explicitly: Plank's translucency is alpha, and without a
-    # compositor it renders as an opaque black block.
+    # switched on explicitly: the panel's translucency is alpha, and without
+    # a compositor it renders as an opaque black block.
     #
     # show_dock_shadow is turned off. xfwm4 draws a drop shadow around every
-    # dock window by default, and Plank's window spans the whole monitor
-    # width and is 118px tall even though it only paints its icon bar: the
-    # shadow is therefore a full-width band floating across the bottom of
-    # the screen, which reads as a translucent panel that is not there.
-    # Turning it off leaves Plank's dock visible and its oversized, fully
-    # transparent window invisible. (It also drops the shadow around the
-    # panels, which is what we want for the docked top bar.)
+    # dock window by default, and the docked XFCE panel is one: with the
+    # shadow on, the edge-to-edge top bar carries a band of shadow down its
+    # whole width that reads as a translucent panel that is not there.
     cat > "${XCONF_DIR}/xfwm4.xml" <<XFWM
 <?xml version="1.0" encoding="UTF-8"?>
 <channel name="xfwm4" version="1.0">
@@ -547,7 +546,9 @@ DESKTOP
     # XFCE ships two panels by default: the top bar (menu, task list, tray,
     # clock, actions) and a 48px bottom bar holding launchers -- the panel
     # XFCE presents as its "dock". The bottom bar is dropped here because
-    # Plank is the dock now; leaving it would put two docks on screen.
+    # the dock is the web client's: the browser renders a bottom-edge app
+    # dock over the stream, so a panel of launchers at the bottom of the
+    # remote desktop would only duplicate it.
     #
     # The top bar stays docked: position p=6 (SNAP_POSITION_NW) with length
     # 100 pins it to the top-left and edge to edge. That is the geometry
@@ -644,91 +645,16 @@ PANEL
     grep -q '^menu-opacity=' "$WHISKER_DEFAULTS" \
         || printf 'menu-opacity=0\n' >> "$WHISKER_DEFAULTS"
 
-    # ── Plank: the bottom dock ─────────────────────────────────────────────
+    # ── The dock is the web client's ───────────────────────────────────────
     #
-    # Plank is configured by /usr/local/bin/plank-setup, run from
-    # xfce-vnc-session: its preferences live in dconf, which needs the session
-    # D-Bus, and its launchers live under $HOME, which may be a fresh mount in
-    # a deployment. The autostart entry lets xfce4-session own the dock's
-    # lifetime so it comes back with the session.
-    #
-    # Orchis ships a matching Plank dock theme inside each GTK theme
-    # directory, but Plank looks for dock themes under its own data
-    # directory -- so copy it into place as `Orchis`.
-    log "Writing the Plank autostart entry and setup helper"
-    if [ -f "/usr/share/themes/${ORCHIS_THEME}/plank/dock.theme" ]; then
-        install -d /usr/share/plank/themes/Orchis
-        install -m 0644 "/usr/share/themes/${ORCHIS_THEME}/plank/dock.theme" \
-            /usr/share/plank/themes/Orchis/dock.theme
-    else
-        warn "Orchis ships no Plank dock theme; Plank will use its own default"
-    fi
+    # Nothing is installed here on purpose. Earlier revisions of this image
+    # shipped the Plank dock on the bottom edge; application launching now
+    # lives in the web client's own app dock (client/js/appdock.js), which
+    # renders pinned and running applications at the bottom of the browser
+    # page and drives them over the desktop API. Keeping the bottom edge
+    # clear of a remote dock leaves the streamed desktop unobstructed.
 
-    install -d /etc/xdg/autostart
-    cat > /etc/xdg/autostart/plank.desktop <<'PLANKDESKTOP'
-[Desktop Entry]
-Type=Application
-Name=Plank
-Comment=Elegant, simple, clean dock
-Exec=plank
-Icon=plank
-Terminal=false
-Categories=Utility;
-OnlyShowIn=XFCE;
-PLANKDESKTOP
-
-    cat > /usr/local/bin/plank-setup <<'PLANKSETUP'
-#!/bin/sh
-# Configure the Plank dock on the session's X display. Written by install.sh and
-# run from xfce-vnc-session once the session D-Bus is up. Best-effort by
-# design: a dock that fails to configure must not keep the desktop from
-# starting, so every step is allowed to fail quietly.
-
-SCHEMA=net.launchpad.plank.dock.settings
-DOCK_PATH=/net/launchpad/plank/docks/dock1/
-LAUNCHERS="$HOME/.config/plank/dock1/launchers"
-
-# Launchers. Plank loads every *.dockitem in the launchers folder; an existing
-# item is left untouched so a user's own edits survive a restart. The set
-# mirrors what this desktop actually ships, and deliberately matches the
-# applications the web client's own dock used to launch -- the client's dock is
-# now controls-only, so Plank is where the apps are.
-if [ -d "$HOME" ]; then
-    mkdir -p "$LAUNCHERS" 2>/dev/null
-    for desktop in \
-        /usr/share/applications/thunar.desktop \
-        /usr/share/applications/xfce4-terminal.desktop \
-        /usr/share/applications/google-chrome.desktop \
-        /usr/share/applications/com.microsoft.VSCode.desktop \
-        /usr/share/applications/code.desktop \
-        /usr/local/share/applications/synaptic.desktop; do
-        [ -f "$desktop" ] || continue
-        item="$LAUNCHERS/$(basename "$desktop" .desktop).dockitem"
-        [ -e "$item" ] && continue
-        printf '[PlankDockItemPreferences]\nLauncher=file://%s\n' "$desktop" >"$item" 2>/dev/null
-    done
-fi
-
-# Dock preferences. The dock sits at the bottom, where the second XFCE panel
-# used to be (install.sh drops that panel from the panel defaults). Hiding is
-# `intelligent` so windows can use the screen edge behind the dock: Plank only
-# reserves space for itself in `none` mode, so every other mode leaves the edge
-# free and slides the dock away when a window would overlap it. Idempotent, so
-# it simply reasserts itself each start.
-if command -v gsettings >/dev/null 2>&1; then
-    gsettings set "$SCHEMA:$DOCK_PATH" theme         'Orchis'       2>/dev/null
-    gsettings set "$SCHEMA:$DOCK_PATH" position      'bottom'       2>/dev/null
-    gsettings set "$SCHEMA:$DOCK_PATH" alignment     'center'       2>/dev/null
-    gsettings set "$SCHEMA:$DOCK_PATH" hide-mode     'intelligent'  2>/dev/null
-    gsettings set "$SCHEMA:$DOCK_PATH" icon-size     40             2>/dev/null
-    gsettings set "$SCHEMA:$DOCK_PATH" zoom-enabled  true           2>/dev/null
-fi
-
-exit 0
-PLANKSETUP
-    chmod +x /usr/local/bin/plank-setup
-
-    log "Look and feel applied: ${ORCHIS_THEME} (compact), ${ORCHIS_ICONS}, docked panel, Plank dock"
+    log "Look and feel applied: ${ORCHIS_THEME} (compact), ${ORCHIS_ICONS}, docked panel"
 else
     log "INSTALL_THEME=0: keeping the stock XFCE look"
 fi
@@ -1002,13 +928,6 @@ export XDG_CURRENT_DESKTOP=XFCE
 # /tmp/gvfs-trust.log and must never keep the desktop from starting.
 /usr/local/bin/trust-desktop-launchers || true
 
-# Configure the Plank dock (launchers and dconf preferences). Requires the
-# session D-Bus set up above for the dconf write; see plank-setup for why this
-# runs here rather than at build time. Tolerant of failure so a dock that will
-# not configure never keeps the desktop from starting, and absent when the
-# image was built with INSTALL_THEME=0.
-[ -x /usr/local/bin/plank-setup ] && /usr/local/bin/plank-setup || true
-
 # Bridge the X clipboard to the VNC clipboard in both directions.
 #   vncconfig  = VNC side  <-> X selections
 #   autocutsel = PRIMARY   <-> CLIPBOARD
@@ -1218,7 +1137,6 @@ cat <<SUMMARY
   Scripts written:
     /usr/local/bin/start-vnc        Xtigervnc + XFCE + websockify
     /usr/local/bin/xfce-vnc-session XFCE session run inside X
-$(if [ -x /usr/local/bin/plank-setup ]; then echo "    /usr/local/bin/plank-setup      Plank dock launchers + preferences"; fi)
 
   Defaults:
     display   ${VNC_DISPLAY}  ${VNC_GEOMETRY} depth ${VNC_DEPTH}
@@ -1234,7 +1152,7 @@ $(if have_app firefox;     then echo "    firefox    $(firefox --version)"; fi)
 $(if have_app code;        then echo "    code       $(code --version | head -1)"; fi)
 
   Desktop look:
-$(if [ "${INSTALL_THEME:-1}" = "1" ]; then echo "    ${ORCHIS_THEME:-Orchis-Dark-Compact} (compact), ${ORCHIS_ICONS:-Tela-circle-dark} icons, docked panel, Plank dock"; else echo "    stock XFCE (INSTALL_THEME=0)"; fi)
+$(if [ "${INSTALL_THEME:-1}" = "1" ]; then echo "    ${ORCHIS_THEME:-Orchis-Dark-Compact} (compact), ${ORCHIS_ICONS:-Tela-circle-dark} icons, docked panel"; else echo "    stock XFCE (INSTALL_THEME=0)"; fi)
 
   CMD ["start-vnc"]
 
