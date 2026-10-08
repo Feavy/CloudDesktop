@@ -210,11 +210,11 @@ body.mobile-fullscreen #vnc-container { inset: 0 !important; }
   content: '';
   width: 4px; height: 40px;
   background: var(--text-muted);
-  opacity: 0.6;
+  opacity: 0.85;
   border-radius: 2px;
   transition: opacity 0.15s ease;
 }
-.dock-trigger:hover::after { opacity: 0.95; }
+.dock-trigger:hover::after { opacity: 1; }
 
 /* ═══════════════════════════════════════════════════════════
    Dock — vertical control strip on the left edge

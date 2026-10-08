@@ -262,9 +262,22 @@ function applyAutoHide() {
   }
 }
 
-// Mouse trigger (desktop)
-dockTrigger.addEventListener('mouseenter', showDock);
-dock.addEventListener('mouseenter', showDock);
+// Mouse trigger (desktop). A real touch suppresses the compatibility mouse
+// events the browser synthesises from it, but on hybrid devices a stray mouse
+// event can still arrive right after a touch — and mouseenter calls showDock,
+// which would cancel the auto-hide timer the touch path just scheduled. So
+// mouse events are ignored for a moment after any touch.
+let lastTouchAt = 0;
+document.addEventListener('touchstart', () => { lastTouchAt = Date.now(); },
+  { capture: true, passive: true });
+const fromTouch = () => Date.now() - lastTouchAt < 1000;
+
+dockTrigger.addEventListener('mouseenter', () => { if (!fromTouch()) showDock(); });
+// Leaving the hotzone without entering the dock must still arm the timer —
+// the hotzone is only a band around the marker, so this is the normal way a
+// hover ends when the pointer moves off along the edge.
+dockTrigger.addEventListener('mouseleave', scheduleDockHide);
+dock.addEventListener('mouseenter', () => { if (!fromTouch()) showDock(); });
 dock.addEventListener('mouseleave', scheduleDockHide);
 
 // Touch trigger — tap bottom edge to toggle dock
@@ -278,13 +291,20 @@ dockTrigger.addEventListener('touchstart', (e) => {
   }
 }, { passive: false });
 
-// Close dock when tapping VNC area or any dock button on mobile
-if (isTouch) {
-  vncContainer.addEventListener('touchstart', () => {
-    if (dock.classList.contains('visible')) hideDock();
-  }, { passive: true });
+// Hide the dock the moment the user interacts with the remote desktop — a
+// mouse click or a touch, on any device. Capture phase is required: noVNC's
+// mouse handlers on the canvas call stopPropagation(), and on touch devices
+// the trackpad handler below stops touch events too, so a bubble-phase
+// listener would never run. Respects the pinned (auto-hide off) setting.
+function hideDockForCanvas() {
+  if (dockAutoHide && dock.classList.contains('visible')) hideDock();
+}
+vncContainer.addEventListener('pointerdown', hideDockForCanvas, { capture: true });
+vncContainer.addEventListener('touchstart', hideDockForCanvas,
+  { capture: true, passive: true });
 
-  // Hide dock after tapping a dock button (app launched)
+// Hide dock after tapping a dock button (app launched) on touch devices
+if (isTouch) {
   dock.addEventListener('click', (e) => {
     if (e.target.closest('.dock-item')) {
       setTimeout(hideDock, 300);
