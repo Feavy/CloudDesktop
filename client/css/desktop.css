@@ -29,8 +29,11 @@
   /* Sizes */
   --topbar-h:    28px;
   --dock-item-sz: 44px;
-  /* Width of the left-edge hotzone that reveals the dock */
+  /* Size of the left-edge hotzone that reveals the dock: a band centred on
+     the marker, not the full edge, so it stays out of the way of taps and
+     drags meant for the remote desktop. */
   --dock-trigger-w: 20px;
+  --dock-trigger-h: min(30vh, 240px);
 }
 
 [data-theme="light"] {
@@ -189,10 +192,16 @@ body.mobile-fullscreen #vnc-container { inset: 0 !important; }
    ═══════════════════════════════════════════════════════════ */
 /* Hover/touch hotzone along the left edge, where the dock slides in from.
    The element itself is invisible; the pill it renders is the marker that
-   tells you where the dock is parked, on every screen size. */
+   tells you where the dock is parked, on every screen size. The hotzone is a
+   band centred on the marker rather than the full edge, so taps and drags
+   meant for the remote desktop keep working along the rest of it. */
 .dock-trigger {
-  position: fixed; top: 0; bottom: 0; left: 0;
-  width: var(--dock-trigger-w, 20px); z-index: 799;
+  position: fixed;
+  top: 50%; left: 0;
+  transform: translateY(-50%);
+  width: var(--dock-trigger-w, 20px);
+  height: var(--dock-trigger-h, min(30vh, 240px));
+  z-index: 799;
   display: flex; align-items: center; justify-content: center;
 }
 
@@ -819,9 +828,10 @@ body.mobile-fullscreen #vnc-container { inset: 0 !important; }
   :root {
     --topbar-h: 0px;
     --dock-item-sz: 38px;
-    /* Wider edge strip on phones; the touch hitbox is enlarged further by
-       the ::before knob defined with the trigger rules below. */
+    /* Larger hotzone band on phones; the ::before knob defined with the
+       trigger rules below stretches it to the dock's own width too. */
     --dock-trigger-w: 24px;
+    --dock-trigger-h: min(60vh, 360px);
   }
 
   /* ── Hide topbar on mobile — maximize VNC space ── */
@@ -891,21 +901,17 @@ body.mobile-fullscreen #vnc-container { inset: 0 !important; }
 
   /* Dock trigger: pill indicator on the left edge, with a much larger
      touch target than the visible sliver suggests.
-     - The element keeps a thin full-height strip (--dock-trigger-w) so an
-       edge tap still works.
-     - ::before adds an invisible, vertically-centred knob around the marker,
-       which is the natural place a thumb reaches for. It stays inside the
-       dock's own footprint, so it does not steal taps across the whole edge. */
+     - The element is a centred band (--dock-trigger-w × --dock-trigger-h),
+       not the full edge, so taps elsewhere reach the remote desktop.
+     - ::before stretches that band to the dock's own width, so the open
+       dock always covers the enlarged target instead of leaving a sliver. */
   .dock-trigger::before {
     content: '';
     position: absolute;
-    left: 0;
-    top: 50%;
-    transform: translateY(-50%);
+    top: 0; bottom: 0; left: 0;
     /* Matches the dock's own width (item size + padding), so the open dock
        always covers the enlarged touch target instead of leaving a sliver. */
     width: calc(var(--dock-item-sz) + 10px);
-    height: min(60vh, 360px);
     /* invisible — it only enlarges the touch hitbox */
   }
   .dock-trigger::after {
