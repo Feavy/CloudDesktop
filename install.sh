@@ -309,6 +309,31 @@ grep -q 'value="whiskermenu"' "$PANEL_DEFAULTS" \
 grep -q 'xfce4-popup-whiskermenu' "$KBD_DEFAULTS" \
     || warn "Keyboard shortcuts no longer bind a menu popup; the Super key may not open Whisker Menu"
 
+# Give the Whisker Menu button the standard XFCE "Applications" look: the
+# plain-text label next to the icon, and the Ubuntu roundel in place of the
+# generic plugin glyph. The plugin reads these keys from defaults.rc in
+# XDG_CONFIG_DIRS for a panel instance that has none of its own xfconf values
+# yet (plugin's Settings::load with is_default=true), so a fresh session
+# starts this way while everything stays user-configurable through the plugin
+# dialog. The icon name resolves through the Tela-circle icon theme installed
+# below (distributor-logo-ubuntu.svg), with a graceful fall back to the
+# generic glyph if that theme ever goes away. Appended, not replaced: the
+# file is a package conffile and upstream keeps other defaults in it (the
+# switch-user command, for one). The directory is created defensively so a
+# future package that ships no defaults.rc still gets these keys. Written
+# outside the INSTALL_THEME split below so both the themed and the stock
+# builds get the same button.
+log "Configuring the Whisker Menu button (Applications label, Ubuntu icon)"
+WHISKER_DEFAULTS=/etc/xdg/xfce4/whiskermenu/defaults.rc
+install -d "$(dirname "$WHISKER_DEFAULTS")"
+touch "$WHISKER_DEFAULTS"
+grep -q '^show-button-title=' "$WHISKER_DEFAULTS" \
+    || printf 'show-button-title=true\n' >> "$WHISKER_DEFAULTS"
+grep -q '^button-title=' "$WHISKER_DEFAULTS" \
+    || printf 'button-title=Applications\n' >> "$WHISKER_DEFAULTS"
+grep -q '^button-icon=' "$WHISKER_DEFAULTS" \
+    || printf 'button-icon=distributor-logo-ubuntu\n' >> "$WHISKER_DEFAULTS"
+
 # Slimmed base images sometimes dpkg-path-exclude every .mo under
 # /usr/share/locale to save space. Everything then installs "successfully" and
 # dpkg -L still lists the catalogs, but none are on disk -- so the desktop
@@ -635,13 +660,9 @@ PANEL
     # Whisker Menu draws its own background: at menu-opacity 100 it paints an
     # opaque rectangle over the theme's rounded popup, squaring it off. The
     # plugin reads this key from defaults.rc in XDG_CONFIG_DIRS for a panel
-    # instance that has none of its own. Appended, not replaced: the file is a
-    # package conffile and upstream keeps other defaults in it (the
-    # switch-user command, for one). The directory is created defensively so a
-    # future package that ships no defaults.rc still gets the key.
-    WHISKER_DEFAULTS=/etc/xdg/xfce4/whiskermenu/defaults.rc
-    install -d "$(dirname "$WHISKER_DEFAULTS")"
-    touch "$WHISKER_DEFAULTS"
+    # instance that has none of its own. The file itself (and the button
+    # defaults) are created above, outside the themed/stock split, so this
+    # only appends the theme-motivated key.
     grep -q '^menu-opacity=' "$WHISKER_DEFAULTS" \
         || printf 'menu-opacity=0\n' >> "$WHISKER_DEFAULTS"
 
