@@ -234,8 +234,9 @@ vncContainer.addEventListener('keydown', async (e) => {
 const dock        = document.getElementById('dock');
 const dockTrigger = document.getElementById('dock-trigger');
 let dockHideTimer = null;
-// Force auto-hide on mobile, respect setting on desktop
-let dockAutoHide  = isMobile ? true : (localStorage.getItem('dock-autohide') === 'on');
+// Auto-hide is the default everywhere — the dock slides away and the left-edge
+// marker shows where it is. The Settings toggle persists an explicit opt-out.
+let dockAutoHide  = localStorage.getItem('dock-autohide') !== 'off';
 
 function showDock() {
   clearTimeout(dockHideTimer);

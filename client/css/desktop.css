@@ -29,6 +29,8 @@
   /* Sizes */
   --topbar-h:    28px;
   --dock-item-sz: 44px;
+  /* Width of the left-edge hotzone that reveals the dock */
+  --dock-trigger-w: 20px;
 }
 
 [data-theme="light"] {
@@ -185,12 +187,25 @@ body.mobile-fullscreen #vnc-container { inset: 0 !important; }
 /* ═══════════════════════════════════════════════════════════
    Dock Trigger Zone
    ═══════════════════════════════════════════════════════════ */
-/* Hover/touch hotzone along the left edge, where the dock slides in from. */
+/* Hover/touch hotzone along the left edge, where the dock slides in from.
+   The element itself is invisible; the pill it renders is the marker that
+   tells you where the dock is parked, on every screen size. */
 .dock-trigger {
   position: fixed; top: 0; bottom: 0; left: 0;
-  width: 14px; z-index: 799;
-  /* invisible touch/hover hotzone */
+  width: var(--dock-trigger-w, 20px); z-index: 799;
+  display: flex; align-items: center; justify-content: center;
 }
+
+/* Marker pill — the same visual cue phones have always shown. */
+.dock-trigger::after {
+  content: '';
+  width: 4px; height: 40px;
+  background: var(--text-muted);
+  opacity: 0.6;
+  border-radius: 2px;
+  transition: opacity 0.15s ease;
+}
+.dock-trigger:hover::after { opacity: 0.95; }
 
 /* ═══════════════════════════════════════════════════════════
    Dock — vertical control strip on the left edge
@@ -804,6 +819,9 @@ body.mobile-fullscreen #vnc-container { inset: 0 !important; }
   :root {
     --topbar-h: 0px;
     --dock-item-sz: 38px;
+    /* Wider edge strip on phones; the touch hitbox is enlarged further by
+       the ::before knob defined with the trigger rules below. */
+    --dock-trigger-w: 24px;
   }
 
   /* ── Hide topbar on mobile — maximize VNC space ── */
@@ -871,16 +889,27 @@ body.mobile-fullscreen #vnc-container { inset: 0 !important; }
   }
   .dock-util svg { width: 17px; height: 17px; }
 
-  /* Dock trigger: pill indicator on the left edge */
-  .dock-trigger {
-    width: 20px;
-    display: flex; align-items: center; justify-content: center;
+  /* Dock trigger: pill indicator on the left edge, with a much larger
+     touch target than the visible sliver suggests.
+     - The element keeps a thin full-height strip (--dock-trigger-w) so an
+       edge tap still works.
+     - ::before adds an invisible, vertically-centred knob around the marker,
+       which is the natural place a thumb reaches for. It stays inside the
+       dock's own footprint, so it does not steal taps across the whole edge. */
+  .dock-trigger::before {
+    content: '';
+    position: absolute;
+    left: 0;
+    top: 50%;
+    transform: translateY(-50%);
+    /* Matches the dock's own width (item size + padding), so the open dock
+       always covers the enlarged touch target instead of leaving a sliver. */
+    width: calc(var(--dock-item-sz) + 10px);
+    height: min(60vh, 360px);
+    /* invisible — it only enlarges the touch hitbox */
   }
   .dock-trigger::after {
-    content: '';
-    width: 4px; height: 36px;
-    background: rgba(255, 255, 255, 0.3);
-    border-radius: 2px;
+    width: 5px; height: 44px;
   }
 
   /* ── Bottom-sheet modals ── */
@@ -1023,7 +1052,7 @@ body.standalone-app textarea {
     padding-left: calc(6px + env(safe-area-inset-left, 0px));
   }
   .dock-trigger {
-    width: calc(14px + env(safe-area-inset-left, 0px));
+    width: calc(var(--dock-trigger-w, 20px) + env(safe-area-inset-left, 0px));
   }
   .modal-card {
     padding-bottom: calc(16px + env(safe-area-inset-bottom, 0px));
