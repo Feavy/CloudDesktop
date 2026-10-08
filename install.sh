@@ -553,6 +553,13 @@ log "Runtime user: $DESKTOP_USER (uid $DESKTOP_UID), home $DESKTOP_HOME, passwor
 #     unpacks in seconds. Each theme directory carries the GTK 2/3/4 styles,
 #     the xfwm4 window decorations and a Plank dock theme in one piece -- the
 #     whole set XFCE reads -- so a single download covers everything.
+#
+#     The panel layout is reworked too. XFCE's stock default is two panels: a
+#     top bar (menu, taskbar, clock) and a second 48px panel along the bottom
+#     holding launchers -- the panel XFCE ships as its "dock". That bottom
+#     panel is dropped so the dock the user sees is Plank, and the top bar is
+#     made translucent: it defaults to an opaque dark bar that ignores the GTK
+#     theme, which is why a themed desktop still looks unthemed along the top.
 # ─────────────────────────────────────────────────────────────────────────────
 if [ "${INSTALL_THEME:-1}" = "1" ]; then
     log "Installing theme packages (Orchis, Papirus icons, Plank dock)"
@@ -647,6 +654,50 @@ XFWM4XML
         warn "Orchis theme is not installed; leaving the stock theme and icons"
     fi
 
+    # Rework the stock panel layout. Two edits: drop the second panel (the
+    # bottom launcher bar XFCE ships as its "dock", which would otherwise sit
+    # under Plank), and make the surviving top bar translucent.
+    #
+    # Both edits key off the exact indentation of the packaged file, which is
+    # stable for a given XFCE release: the panels array's own <value> lines are
+    # the only ones indented four spaces, so deleting value 2 there cannot hit
+    # a plugin-ids list (indented eight), and panel-2's closing tag is the next
+    # line indented four spaces. If a future package reformats the file the
+    # greps below warn rather than leaving a silently broken layout.
+    PANEL_DEFAULTS=/etc/xdg/xfce4/panel/default.xml
+    if [ -f "$PANEL_DEFAULTS" ]; then
+        log "Reworking the XFCE panel default (translucent top bar, no stock dock)"
+        # dark-mode pins the panel to a dark theme regardless of the GTK
+        # theme, so the Orchis theme never reaches it. Turn it off.
+        sed -i 's|name="dark-mode" type="bool" value="true"|name="dark-mode" type="bool" value="false"|' "$PANEL_DEFAULTS"
+        awk '
+            /^  <property name="panels" type="array">$/ { in_panels = 1 }
+            in_panels && /^    <value type="int" value="2"\/>$/ { next }
+            in_panels && /^  <\/property>$/ { in_panels = 0 }
+            /^    <property name="panel-2" type="empty">$/ { skip = 1; next }
+            skip && /^    <\/property>$/ { skip = 0; next }
+            skip { next }
+            { print }
+            /^    <property name="panel-1" type="empty">$/ {
+                print "      <property name=\"background-style\" type=\"uint\" value=\"1\"/>"
+                print "      <property name=\"background-rgba\" type=\"array\">"
+                print "        <value type=\"double\" value=\"0\"/>"
+                print "        <value type=\"double\" value=\"0\"/>"
+                print "        <value type=\"double\" value=\"0\"/>"
+                print "        <value type=\"double\" value=\"0.35\"/>"
+                print "      </property>"
+            }
+        ' "$PANEL_DEFAULTS" > "$PANEL_DEFAULTS.new" \
+            && mv "$PANEL_DEFAULTS.new" "$PANEL_DEFAULTS"
+        if grep -q 'name="panel-2"' "$PANEL_DEFAULTS"; then
+            warn "The stock bottom panel is still declared; a launcher dock will appear alongside Plank"
+        fi
+        grep -q 'name="background-rgba"' "$PANEL_DEFAULTS" \
+            || warn "Could not make the top bar translucent; it will stay opaque"
+    else
+        warn "$PANEL_DEFAULTS not found; leaving the XFCE panel layout alone"
+    fi
+
     # Plank is configured by /usr/local/bin/plank-setup, run from
     # xfce-vnc-session: its preferences live in dconf, which needs a session
     # D-Bus, and its launchers live under $HOME, which may be a fresh mount in
@@ -697,19 +748,20 @@ if [ -d "$HOME" ]; then
     done
 fi
 
-# Dock preferences. The dock sits on the left edge rather than the usual bottom
-# one: the web client already draws its own floating bar across the bottom
-# centre of the view, and two docks in the same place read as a glitch. `none`
-# keeps it on screen so it is discoverable, and Plank reserves the edge so
-# windows do not maximise over it. Idempotent, so it simply reasserts itself
-# each start.
+# Dock preferences. The dock sits at the bottom, where the second XFCE panel
+# used to be (install.sh removes that panel from the panel default). Hiding is
+# set to `intelligent` so windows can use the screen edge behind the dock:
+# Plank only reserves space for itself in `none` mode
+# (DockWindow.vala: `if (prefs.HideMode == HideType.NONE) get_struts()`), so
+# every other mode leaves the edge free and slides the dock away when a window
+# would overlap it. Idempotent, so it simply reasserts itself each start.
 if command -v gsettings >/dev/null 2>&1; then
-    gsettings set "$SCHEMA:$DOCK_PATH" theme         'Orchis'   2>/dev/null
-    gsettings set "$SCHEMA:$DOCK_PATH" position      'left'     2>/dev/null
-    gsettings set "$SCHEMA:$DOCK_PATH" alignment     'center'   2>/dev/null
-    gsettings set "$SCHEMA:$DOCK_PATH" hide-mode     'none'     2>/dev/null
-    gsettings set "$SCHEMA:$DOCK_PATH" icon-size     48         2>/dev/null
-    gsettings set "$SCHEMA:$DOCK_PATH" zoom-enabled  true       2>/dev/null
+    gsettings set "$SCHEMA:$DOCK_PATH" theme         'Orchis'       2>/dev/null
+    gsettings set "$SCHEMA:$DOCK_PATH" position      'bottom'       2>/dev/null
+    gsettings set "$SCHEMA:$DOCK_PATH" alignment     'center'       2>/dev/null
+    gsettings set "$SCHEMA:$DOCK_PATH" hide-mode     'intelligent'  2>/dev/null
+    gsettings set "$SCHEMA:$DOCK_PATH" icon-size     48             2>/dev/null
+    gsettings set "$SCHEMA:$DOCK_PATH" zoom-enabled  true           2>/dev/null
 fi
 
 exit 0

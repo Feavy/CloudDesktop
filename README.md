@@ -129,11 +129,16 @@ applied to both GTK and xfwm4 — plus Papirus-Dark icons and a Plank dock. Orch
 fetched as its pinned release tarball rather than built from source, so no `sassc` and no
 extra toolchain are involved. The xfwm4 defaults also switch on compositing, because the
 rounded corners and the dock's translucency are alpha and render as opaque black squares
-without it. The dock sits on the **left** edge rather than the bottom: the web client
-already draws its own floating bar across the bottom centre of the view, and a second
-dock in the same place reads as a glitch. All of this is best-effort — a failed theme
-download leaves the stock look rather than failing the build — and `INSTALL_THEME=0`
-skips it entirely.
+without it.
+
+The panel layout is reworked too. XFCE's stock default is two panels: a top bar (menu,
+taskbar, clock) and a second 48px panel along the bottom holding launchers — the panel
+XFCE ships as its "dock". That bottom panel is dropped so the dock you see is Plank, and
+the top bar is made translucent, since it otherwise defaults to an opaque dark bar that
+ignores the GTK theme. The dock uses `intelligent` hiding so windows can use the screen
+edge behind it: Plank only reserves space for itself in `none` mode. All of this is
+best-effort — a failed theme download leaves the stock look rather than failing the
+build — and `INSTALL_THEME=0` skips it entirely.
 
 Extras:
 
