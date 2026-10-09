@@ -1868,10 +1868,10 @@ if (isTouch) {
     return css > 0 ? css / canvas.width : 1;
   }
 
-  // Remote-screen coordinate under the virtual cursor. The arrow is what drives
-  // the remote pointer, so this is derived from it -- but it is the thing that
-  // has to stay put whenever the view changes underneath for a reason that is
-  // not the user moving the arrow.
+  // Remote-screen coordinate under the virtual cursor. The crosshair is what
+  // drives the remote pointer, so this is derived from it -- but it is the
+  // thing that has to stay put whenever the view changes underneath for a
+  // reason that is not the user moving the crosshair.
   function cursorFramebuffer() {
     const canvas = getCanvas();
     if (!canvas || !canvas.width) return null;
@@ -1889,7 +1889,7 @@ if (isTouch) {
   }
 
   // Draw container point `content` at (tx, ty), and bring the virtual cursor
-  // along with it: the arrow has to keep pointing at the same remote spot, or
+  // along with it: the crosshair has to keep marking the same remote spot, or
   // the next click would land somewhere else than what it looks like it is on.
   function parkContentAt(content, tx, ty) {
     vncZoom = Math.max(MIN_ZOOM, Math.min(MAX_ZOOM, vncZoom));
@@ -1923,7 +1923,7 @@ if (isTouch) {
   // and legible.
   const CURSOR_KEEP_PX = 24;   // how close to the bar the cursor may get
   let viewBeforeKeyboard = null;
-  // Remote point under the arrow when the keyboard was summoned; see onWillOpen.
+  // Remote point under the cursor when the keyboard was summoned; see onWillOpen.
   let fieldBeforeKeyboard = null;
 
   function applyKeyboardZoom(fieldFb) {
@@ -1942,7 +1942,7 @@ if (isTouch) {
     vncZoom = Math.max(MIN_ZOOM, Math.min(MAX_ZOOM, fit > 0 ? fullWidth / fit : 1));
     // Android shrank the viewport for the keyboard on the way in and noVNC
     // re-fitted the desktop into what was left, which moved the desktop out from
-    // under the arrow. Put the arrow back on the remote point it was on before
+    // under the cursor. Put the cursor back on the remote point it was on before
     // that -- the field being typed into -- so the magnified view is centred on
     // it rather than on wherever the re-fit left it.
     if (fieldFb) placeCursorAtFramebuffer(fieldFb);
@@ -1969,15 +1969,15 @@ if (isTouch) {
     // scaled for the strip it no longer has. Re-assigning the property it
     // already has is the public way to do that.
     if (rfb) rfb.scaleViewport = true;
-    // The desktop has just been re-fitted around the arrow, so put the arrow
+    // The desktop has just been re-fitted around the cursor, so put the cursor
     // back on the remote point it was pointing at.
     if (fb) placeCursorAtFramebuffer(fb);
   }
 
   // Trackpad movement while the keyboard is up: the remote cursor follows the
-  // arrow, so an arrow that slips under the keyboard would hide the very thing
-  // being typed into. Recentring only once it reaches the bar leaves ordinary
-  // movement, and any manual pan, alone.
+  // crosshair, so a crosshair that slips under the keyboard would hide the very
+  // thing being typed into. Recentring only once it reaches the bar leaves
+  // ordinary movement, and any manual pan, alone.
   function followCursor() {
     if (safeBottom <= 0) return;
     const canvas = getCanvas();
@@ -2290,9 +2290,9 @@ if (isTouch) {
   // mobile-keyboard.js for why.
   keyboard = createMobileKeyboard({
     getRfb: () => rfb,
-    // The remote point the arrow is on when the keyboard is summoned: on
+    // The remote point the cursor is on when the keyboard is summoned: on
     // Android the viewport shrinks for it and noVNC re-fits the desktop, so by
-    // the time the keyboard has settled the arrow is over something else. This
+    // the time the keyboard has settled the cursor is over something else. This
     // is the field being typed into, and what the magnified view centres on.
     onWillOpen: () => { fieldBeforeKeyboard = cursorFramebuffer(); },
     onOpenChange: (isOpen) => {
