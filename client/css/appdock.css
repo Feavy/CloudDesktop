@@ -48,7 +48,9 @@
 /* ── Dock strip ── */
 .app-dock {
   position: fixed;
-  bottom: 10px;
+  /* Same gap from the bottom edge as the left dock keeps from the left
+     edge; the safe-area rule below adds the home-indicator inset on top. */
+  bottom: var(--dock-edge-gap, 6px);
   left: 50%;
   transform: translateX(-50%) translateY(calc(100% + 24px));
   z-index: 850;
@@ -472,11 +474,14 @@
 
 @media (max-width: 600px) {
   .app-dock {
-    bottom: 6px;
+    /* Phones pin the left dock flush to the left edge, so the app dock sits
+       flush to the bottom edge too, squared off on that side to match. */
+    bottom: var(--dock-edge-gap, 6px);
     max-width: calc(100vw - 12px);
     padding: 5px 6px;
     gap: 1px;
-    border-radius: 18px;
+    border-radius: 18px 18px 0 0;
+    border-bottom: none;
     overflow-x: auto;
     overflow-y: hidden;
     scrollbar-width: none;
@@ -539,7 +544,7 @@
 
 @supports (padding: env(safe-area-inset-bottom)) {
   .app-dock {
-    bottom: calc(6px + env(safe-area-inset-bottom, 0px));
+    bottom: calc(var(--dock-edge-gap, 6px) + env(safe-area-inset-bottom, 0px));
   }
   .app-dock-trigger {
     height: calc(var(--app-dock-trigger-h, 18px) + env(safe-area-inset-bottom, 0px));
