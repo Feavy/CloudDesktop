@@ -1,7 +1,6 @@
 import RFB from '/vendor/novnc/core/rfb.js';
 import { notify, init as initNotifications } from '/js/notifications.js?cv=%CACHE_VERSION%';
 import { createMobileKeyboard } from '/js/mobile-keyboard.js?cv=%CACHE_VERSION%';
-import { createKeyboardInset } from '/js/keyboard-inset.js?cv=%CACHE_VERSION%';
 import { initAppDock, hideAppDock, setAppDockAutoHide, iconUrl } from '/js/appdock.js?cv=%CACHE_VERSION%';
 import { sendRestartShortcut } from '/js/session-restart.js?cv=%CACHE_VERSION%';
 
@@ -2101,12 +2100,6 @@ if (isTouch) {
       scheduleAutoFit();
     },
   });
-
-  // The client's own fields (the modal bottom sheets) summon the same soft
-  // keyboard. This publishes --kb-inset so the phone breakpoint can hold a
-  // sheet above it, and brings the field being typed into back into the part of
-  // the sheet that is still visible. See keyboard-inset.js.
-  createKeyboardInset();
 
   document.getElementById('mob-keyboard').addEventListener('click', (e) => {
     e.stopPropagation();
