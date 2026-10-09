@@ -399,8 +399,8 @@
   font-weight: 450;
 }
 
-/* One window row: the focus button takes the width, the minimize control
-   rides at its trailing edge. */
+/* One window row: the focus button takes the width and the icon controls
+   (minimize, close) ride at its trailing edge. */
 .app-ctx-row {
   display: flex;
   align-items: center;
@@ -412,7 +412,8 @@
   min-width: 0;
 }
 
-.app-ctx-min {
+.app-ctx-min,
+.app-ctx-close {
   flex-shrink: 0;
   display: flex;
   align-items: center;
@@ -429,8 +430,13 @@
 }
 
 .app-ctx-min:hover { background: var(--dock-hover); color: var(--text); }
-.app-ctx-min:active { filter: brightness(0.82); }
-.app-ctx-min svg { width: 15px; height: 15px; }
+/* Closing is destructive, so it reads as danger on hover, like the
+   "Close All Windows" entry. */
+.app-ctx-close:hover { background: rgba(255, 69, 58, 0.16); color: #ff453a; }
+.app-ctx-min:active,
+.app-ctx-close:active { filter: brightness(0.82); }
+.app-ctx-min svg,
+.app-ctx-close svg { width: 15px; height: 15px; }
 
 .app-ctx-sep {
   height: 1px;
@@ -537,6 +543,6 @@
   }
 }
 
-.app-dock-item, .apps-tile, .apps-chip, .apps-close-btn, .app-ctx-item, .app-ctx-min {
+.app-dock-item, .apps-tile, .apps-chip, .apps-close-btn, .app-ctx-item, .app-ctx-min, .app-ctx-close {
   touch-action: manipulation;
 }

@@ -4,7 +4,8 @@
 // running but unpinned, then the button that opens the applications grid.
 // Running applications carry a dot; clicking activates (focuses a window
 // or launches); right-click / long-press opens a context menu with
-// per-window focus and minimize, pin/unpin, "minimize all" and "close all".
+// per-window focus, minimize and close, pin/unpin, and "minimize all" /
+// "close all".
 //
 // Server side this leans on:
 //   GET  /api/desktop/apps           installed applications
@@ -21,6 +22,8 @@ const FALLBACK_ICON_SVG = '<svg viewBox="0 0 16 16" fill="none" stroke="currentC
 const GRID_ICON_SVG = '<svg viewBox="0 0 22 22" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"><rect x="3" y="3" width="7" height="7" rx="1.6"/><rect x="12" y="3" width="7" height="7" rx="1.6"/><rect x="3" y="12" width="7" height="7" rx="1.6"/><rect x="12" y="12" width="7" height="7" rx="1.6"/></svg>';
 
 const MINIMIZE_ICON_SVG = '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"><line x1="4" y1="11" x2="12" y2="11"/></svg>';
+
+const CLOSE_ICON_SVG = '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"><line x1="4.5" y1="4.5" x2="11.5" y2="11.5"/><line x1="11.5" y1="4.5" x2="4.5" y2="11.5"/></svg>';
 
 // ── Elements ────────────────────────────────────────────────
 
@@ -226,6 +229,13 @@ async function minimizeAppWindows(id) {
   schedulePoll(600);
 }
 
+// Close one window, the same graceful _NET_CLOSE_WINDOW its own close
+// button sends, so an app may still show an "unsaved work" dialog.
+async function closeWindow(winId) {
+  try { await jsonFetch('/api/desktop/windows/close', 'POST', { id: winId }); } catch { /* silent */ }
+  schedulePoll(600);
+}
+
 function togglePin(id) {
   const i = pins.indexOf(id);
   if (i >= 0) pins.splice(i, 1);
@@ -368,9 +378,9 @@ function addCtxItem(label, { danger = false, onClick = null } = {}) {
   ctxMenu.appendChild(btn);
 }
 
-// One window row: the title focuses the window, and a trailing control
-// minimizes just that one. The row has to be a div rather than a button,
-// since it holds the second button.
+// One window row: the title focuses the window, and trailing controls
+// minimize or close just that one. The row has to be a div rather than a
+// button, since it holds the extra buttons.
 function addWindowCtxItem(win, appId) {
   const row = document.createElement('div');
   row.className = 'app-ctx-row';
@@ -398,7 +408,18 @@ function addWindowCtxItem(win, appId) {
     minimizeWindow(win.id);
   });
 
-  row.append(focusBtn, minBtn);
+  const closeBtn = document.createElement('button');
+  closeBtn.type = 'button';
+  closeBtn.className = 'app-ctx-close';
+  closeBtn.title = 'Close';
+  closeBtn.setAttribute('aria-label', `Close ${win.title}`);
+  closeBtn.innerHTML = CLOSE_ICON_SVG;
+  closeBtn.addEventListener('click', () => {
+    closeCtxMenu();
+    closeWindow(win.id);
+  });
+
+  row.append(focusBtn, minBtn, closeBtn);
   ctxMenu.appendChild(row);
 }
 
