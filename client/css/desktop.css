@@ -931,13 +931,23 @@ body.mobile-fullscreen #vnc-container { inset: 0 !important; }
     width: var(--dock-trigger-pill, 5px); height: 44px;
   }
 
-  /* ── Bottom-sheet modals ── */
-  .modal { padding: 0; align-items: flex-end; }
+  /* ── Bottom-sheet modals ──
+     --kb-inset is how much of the layout viewport the soft keyboard covers
+     (keyboard-inset.js): 0 on Android, which resizes the layout viewport so the
+     sheet is already above the keyboard, and the keyboard's height on iOS,
+     which overlays the page. Padding the sheet up by it is what keeps the field
+     being typed into visible, and the backdrop still covers the whole screen
+     because padding sits inside the element's painted box. */
+  .modal { padding: 0 0 var(--kb-inset, 0px); align-items: flex-end; }
   .modal-card {
     max-width: 100%;
     border-radius: 20px 20px 0 0;
     padding: 6px 16px calc(16px + env(safe-area-inset-bottom, 0px));
-    max-height: 85vh;
+    /* The usual cap, or the strip left above the keyboard, whichever is
+       smaller. 100% resolves against the modal's content box, which the padding
+       above has already shortened by the inset; without it a tall sheet would
+       keep its full height and slide off the top of the screen. */
+    max-height: min(85vh, 100%);
     overflow-y: auto;
     -webkit-overflow-scrolling: touch;
   }
