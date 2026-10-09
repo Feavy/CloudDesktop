@@ -348,20 +348,37 @@ All settings are environment variables.
 | `DISPLAY` | `:1` | X display used for `xrandr`/`xclip`/`wmctrl` |
 | `XAUTHORITY` | `$HOME/.Xauthority` | X authority file |
 | `HOME` | passwd entry | Base for `~/Desktop` and `~/Downloads` |
-| `RESTART_CMD` | *(unset)* | Fallback restart command for non-container runs; not consulted in a pod |
+| `RESTART_CMD` | *(unset)* | Restart command used when there is no container to restart (a dev checkout) |
+| `RESTART_MODE` | `auto` | Force how the dock restarts: `auto`, `pod`, `session`, `command` or `off` |
 
-In a container the dock's Restart button restarts the pod by exiting: the web
-client stops, the entrypoint supervising it exits too, and the runtime starts
-the container again. Both the client image (where the server is PID 1) and the
-all-in-one image (where `entrypoint.sh` waits on it) are built for this, so it
-works with no configuration. With the all-in-one image that restarts the
-desktop as well; when the VNC server runs in a *separate* container of the same
-pod, only this container is restarted.
+The dock's Restart button uses whichever mechanism actually reaches the
+desktop. The server reports its choice as `restartMode` from
+`GET /api/desktop/config`, and the browser performs the `session` one itself:
 
-`RESTART_CMD` is only consulted outside a container — a dev checkout — where
-there is no pod to restart; it replaces the old `systemctl restart
-clouddesktop-vnc` call. If neither applies, the button is hidden rather than
-failing.
+- **`pod`** — the desktop shares this container (the all-in-one image). The web
+  client exits, the entrypoint supervising it exits too, and the runtime starts
+  the pod again. This is the client image as well, where the server is PID 1.
+  Nothing to configure.
+- **`session`** — the desktop runs in a *separate* container of the same pod.
+  Nothing in this process can signal it and there is no cluster API access, so
+  the browser ends the session over VNC instead: it presses Ctrl+Alt+Shift+R,
+  which the desktop image binds to `xfce4-session-logout --logout` (added by
+  `install.sh`). `start-vnc` sees the session exit, the container goes down and
+  Kubernetes starts it again. The web client and its VNC bridge stay up
+  throughout and the canvas reconnects on its own. This needs the desktop to be
+  one of this repo's images — or to bind that chord itself — and needs the
+  session to be alive enough to handle the key press, so a completely wedged X
+  server is still out of reach this way.
+- **`command`** — no container at all (a dev checkout), so `RESTART_CMD` runs.
+  It replaces the old `systemctl restart clouddesktop-vnc` call.
+- **`off`** — none of the above, so the button is hidden rather than failing.
+
+`auto` decides between `pod` and `session` by looking for the desktop's
+processes in this container's own PID namespace — a sidecar's are not visible,
+which is what distinguishes the two. That is only a guess (and it is wrong if
+the pod sets `shareProcessNamespace`, which makes a sidecar's processes visible
+too), so set `RESTART_MODE` to force the right one when it does not match the
+deployment.
 
 ---
 
@@ -433,7 +450,7 @@ All routes are unauthenticated; the reverse proxy gates them.
 | `GET` | `/api/desktop/config` | Home dir, VNC endpoint, which dock actions are available |
 | `GET`/`POST` | `/api/desktop/clipboard` | Read/write the X clipboard |
 | `POST` | `/api/desktop/resolution` | Set the X display size, generating a modeline with `cvt` if needed |
-| `POST` | `/api/desktop/restart` | Restart the pod (the process exits so the runtime restarts it); falls back to `RESTART_CMD` outside a container, `501` if neither |
+| `POST` | `/api/desktop/restart` | Restart the pod (the process exits so the runtime restarts it); `409` when the desktop is a separate container (the browser restarts it over VNC), runs `RESTART_CMD` outside a container, `501` if neither |
 | `GET` | `/api/desktop/stats` | CPU / RAM / disk |
 | `GET` | `/api/desktop/windows` | List open X windows (with `WM_CLASS` and the matched application id) |
 | `POST` | `/api/desktop/windows/focus` | Raise and focus a window |

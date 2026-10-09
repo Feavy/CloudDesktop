@@ -80,14 +80,16 @@ spec:
             # --- X display used for xrandr / xclip / wmctrl ------------
             - name: DISPLAY
               value: ":1"
-            # The dock's "Restart Desktop" button restarts this pod: the web
-            # client exits and the runtime starts the container again, so no
-            # configuration is needed. With the all-in-one image that also
-            # restarts the desktop; a VNC sidecar in a separate container is
-            # not affected. RESTART_CMD is a fallback consulted only outside a
-            # container (a dev checkout), so setting it here has no effect.
-            # - name: RESTART_CMD
-            #   value: "sudo pkill -USR1 Xtigervnc"
+            # The dock's "Restart Desktop" button needs no configuration here.
+            # With the desktop in a container of its own (the setup this file
+            # assumes) the browser ends the session over VNC by pressing the
+            # shortcut start-vnc's image binds to xfce4-session-logout --logout,
+            # and Kubernetes restarts the desktop container. The web client
+            # stays up and reconnects. If the desktop is third-party and does
+            # not bind that chord, point it at Ctrl+Alt+Shift+R, or set
+            # RESTART_MODE=command / off to change or hide the action.
+            # - name: RESTART_MODE
+            #   value: "session"
           securityContext:
             allowPrivilegeEscalation: false
             readOnlyRootFilesystem: true

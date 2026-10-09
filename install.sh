@@ -283,6 +283,7 @@ fc-cache -f >/dev/null 2>&1 || true
 # rather than erroring.
 check_bin startxfce4     xfce4
 check_bin xfce4-session  xfce4
+check_bin xfce4-session-logout xfce4-session
 check_bin xfce4-terminal xfce4-terminal
 check_bin thunar         thunar
 check_bin mousepad       mousepad
@@ -308,6 +309,23 @@ grep -q 'value="whiskermenu"' "$PANEL_DEFAULTS" \
     || warn "Panel template no longer declares applicationsmenu; Whisker Menu was not made the default"
 grep -q 'xfce4-popup-whiskermenu' "$KBD_DEFAULTS" \
     || warn "Keyboard shortcuts no longer bind a menu popup; the Super key may not open Whisker Menu"
+
+# Bind a chord the web client presses over VNC to end the session.
+#
+# When the web client shares a container with the desktop it restarts the pod
+# by exiting. When the desktop runs in a container of its own, though, the
+# client has no way to signal it and no cluster API access to restart the pod,
+# so the VNC session is the only channel that reaches it: the chord logs the
+# session out, start-vnc's watcher sees the session exit, and Kubernetes
+# restarts the desktop container. The stock <Primary><Alt>Delete binding opens
+# the confirmation dialog, which cannot be answered blind, so use --logout.
+#
+# Chord names are stored XML-escaped (&lt; / &gt;), and the insertion is
+# guarded so re-running the script cannot add it twice.
+grep -q 'xfce4-session-logout --logout' "$KBD_DEFAULTS" || \
+    sed -i '\|value="xfce4-session-logout"/>|a\      <property name="&lt;Primary&gt;&lt;Alt&gt;&lt;Shift&gt;r" type="string" value="xfce4-session-logout --logout"/>' "$KBD_DEFAULTS"
+grep -q 'xfce4-session-logout --logout' "$KBD_DEFAULTS" \
+    || warn "Could not add the Restart Desktop shortcut; a desktop in a separate container cannot be restarted from the dock"
 
 # Give the Whisker Menu button the standard XFCE "Applications" look: the
 # plain-text label next to the icon, and the Ubuntu roundel in place of the

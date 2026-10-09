@@ -71,6 +71,11 @@ module.exports = {
   // POST /api/desktop/restart can restart the pod by exiting.
   IS_CONTAINER: detectContainer(),
 
+  // Which restart the dock should use: 'auto' (default) works it out from the
+  // environment, and 'pod' / 'session' / 'command' / 'off' force one when the
+  // guess is wrong. See restartMode() in routes/desktop.js.
+  RESTART_MODE: process.env.RESTART_MODE || 'auto',
+
   // Fallback used only outside a container, where there is no pod to restart:
   // a dev checkout supplies the command that recycles its session. In a
   // container the restart is the pod itself and this is not consulted.

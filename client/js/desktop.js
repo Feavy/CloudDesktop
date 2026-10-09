@@ -2,6 +2,7 @@ import RFB from '/vendor/novnc/core/rfb.js';
 import { notify, init as initNotifications } from '/js/notifications.js?cv=%CACHE_VERSION%';
 import { createMobileKeyboard } from '/js/mobile-keyboard.js?cv=%CACHE_VERSION%';
 import { initAppDock, hideAppDock, setAppDockAutoHide, iconUrl } from '/js/appdock.js?cv=%CACHE_VERSION%';
+import { sendRestartShortcut } from '/js/session-restart.js?cv=%CACHE_VERSION%';
 
 const statusOverlay = document.getElementById('status-overlay');
 const statusText    = document.getElementById('status-text');
@@ -19,6 +20,9 @@ const downloads = new Map();
 
 let rfb = null;
 let reconnectTimer = null;
+// Tracked ourselves: noVNC exposes no public "connected" flag, and the restart
+// path needs to know whether there is a session to send keys to.
+let vncUp = false;
 // Set on touch devices only; guards autoFitResolution while the soft keyboard
 // is animating in or out. See mobile-keyboard.js.
 let keyboard = null;
@@ -87,12 +91,14 @@ async function connect() {
 }
 
 function onConnect() {
+  vncUp = true;
   hideStatus();
   rfb.focus();
   notify('Connected to desktop', 'success', 3000);
 }
 
 function onDisconnect(e) {
+  vncUp = false;
   const clean = (e.detail || {}).clean;
   showStatus(clean ? 'Disconnected from desktop.' : 'Connection lost. Reconnecting…');
   notify(clean ? 'Disconnected from desktop' : 'Connection lost — reconnecting…', 'warning');
@@ -498,6 +504,9 @@ let SERVER_HOME = '/root';
 let SERVER_DESKTOP = '/root/Desktop';
 let SERVER_WS_URL = '';
 let CAN_RESTART = false;
+// 'pod' | 'session' | 'command' | 'off' — the server decides which restart
+// reaches this deployment's desktop, and 'session' is performed here.
+let RESTART_MODE = 'off';
 
 // Resolves once the server has told us how to reach VNC and what the dock
 // should offer. connect() awaits this before opening the WebSocket.
@@ -510,9 +519,10 @@ const serverConfigReady = (async () => {
       if (cfg.desktopDir) SERVER_DESKTOP = cfg.desktopDir;
       if (cfg.wsUrl) SERVER_WS_URL = cfg.wsUrl;
 
-      // The pod restarts itself when we run in a container; otherwise the
+      // The pod restarts itself when we run in a container, otherwise the
       // deployment has to supply a command. Without either, hide the button.
       CAN_RESTART = Boolean(cfg.canRestart);
+      RESTART_MODE = cfg.restartMode || (CAN_RESTART ? 'pod' : 'off');
       const btnRestart = document.getElementById('btn-restart');
       if (btnRestart) btnRestart.hidden = !CAN_RESTART;
 
@@ -676,6 +686,20 @@ async function waitForServerBack() {
 }
 
 document.getElementById('btn-restart').addEventListener('click', async () => {
+  // A desktop in a container of its own is only reachable through the session
+  // it serves: the chord logs it out, start-vnc tears that container down and
+  // Kubernetes starts it again. The VNC disconnect that follows drives the
+  // normal reconnect loop, so this path only has to press the keys.
+  if (RESTART_MODE === 'session') {
+    if (!confirm('Restart the desktop? Unsaved work is lost.')) return;
+    if (!vncUp || !sendRestartShortcut(rfb)) {
+      showStatus('Not connected to the desktop — cannot restart it.');
+      return;
+    }
+    showStatus('Restarting desktop…');
+    return;
+  }
+
   if (!confirm('Restart the desktop? The pod restarts and unsaved work is lost.')) return;
   showStatus('Restarting desktop…');
   try {

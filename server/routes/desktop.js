@@ -95,17 +95,62 @@ const availableApps = Object.entries(ALLOWED_APPS)
   })
   .map(([name]) => name);
 
+// ── How a restart reaches the desktop ──────────────────────
+//
+//   'pod'     the desktop lives in this container (the all-in-one image), so
+//             exiting restarts everything;
+//   'session' it lives in a container of its own, and the VNC session is the
+//             only channel that reaches it: the browser presses a shortcut
+//             bound to xfce4-session-logout --logout, the session ends, and
+//             start-vnc's watcher tears the desktop container down;
+//   'command' no container at all (a dev checkout), so the deployment has to
+//             supply RESTART_CMD;
+//   'off'     none of the above — the dock hides the button.
+//
+// The processes of the all-in-one image are siblings in our own PID namespace;
+// a sidecar's are not visible at all. That is only a guess, so RESTART_MODE
+// can force any of the four.
+const DESKTOP_COMMS = /^(Xtigervnc|Xvnc|Xtightvnc|xfce4-session)$/;
+
+function desktopIsLocal() {
+  try {
+    for (const entry of fs.readdirSync('/proc')) {
+      if (!/^\d+$/.test(entry)) continue;
+      let comm;
+      try {
+        comm = fs.readFileSync(`/proc/${entry}/comm`, 'utf8').trim();
+      } catch {
+        continue; // the process exited between the readdir and the read
+      }
+      if (DESKTOP_COMMS.test(comm)) return true;
+    }
+  } catch { /* no /proc to inspect — assume the desktop is elsewhere */ }
+  return false;
+}
+
+function restartMode() {
+  const forced = config.RESTART_MODE;
+  if (forced !== 'auto') {
+    if (forced === 'command') return config.RESTART_CMD ? 'command' : 'off';
+    if (forced === 'pod' || forced === 'session' || forced === 'off') return forced;
+    return 'off'; // unrecognised value: never guess at a restart
+  }
+  if (config.IS_CONTAINER) return desktopIsLocal() ? 'pod' : 'session';
+  return config.RESTART_CMD ? 'command' : 'off';
+}
+
 // GET /api/desktop/config — environment info and which dock actions apply
 router.get('/config', (_req, res) => {
+  const mode = restartMode();
   res.json({
     homeDir: RUN_HOME,
     desktopDir: DESKTOP_DIR,
     // External websocketify endpoint, or empty to use this server's bridge
     wsUrl: config.WS_URL,
-    // The dock only offers "restart" when it can actually do it: in a
-    // container the pod restarts itself, otherwise the deployment has to
-    // supply a command.
-    canRestart: config.IS_CONTAINER || Boolean(config.RESTART_CMD),
+    // The dock only offers "restart" when there is a way to do it, and it has
+    // to know which one: the browser performs 'session' itself over VNC.
+    canRestart: mode !== 'off',
+    restartMode: mode,
     canLaunch: availableApps,
   });
 });
@@ -176,10 +221,13 @@ router.post('/resolution', (req, res) => {
 // again. The response goes out first on purpose — exiting before it leaves the
 // socket would reset the connection and look like a failure to the browser.
 //
-// Outside a container there is no pod to restart, so the deployment-supplied
-// RESTART_CMD still gets its chance; with neither the dock hides the button.
+// The other modes do not come through here: with the desktop in a separate
+// container the browser ends the session over VNC itself (restartMode()
+// reports 'session'), and outside a container the deployment's command runs.
 router.post('/restart', (_req, res) => {
-  if (config.IS_CONTAINER) {
+  const mode = restartMode();
+
+  if (mode === 'pod') {
     res.json({ ok: true, mode: 'pod' });
     res.on('finish', () => {
       // The short delay lets the response reach the browser before the
@@ -192,7 +240,17 @@ router.post('/restart', (_req, res) => {
     return;
   }
 
-  if (!config.RESTART_CMD) {
+  if (mode === 'session') {
+    // Restarting the desktop container is not something this process can do:
+    // it is not the container being restarted and it cannot signal across the
+    // container boundary. The browser has to do it through the session.
+    return res.status(409).json({
+      error: 'The desktop runs in a separate container; restart it from the session',
+      mode: 'session',
+    });
+  }
+
+  if (mode !== 'command') {
     return res.status(501).json({ error: 'Restart is not available for this deployment' });
   }
 
