@@ -80,10 +80,12 @@ spec:
             # --- X display used for xrandr / xclip / wmctrl ------------
             - name: DISPLAY
               value: ":1"
-            # Optional: shell command the dock's "Restart Desktop" button runs.
-            # Leave unset and the button stays hidden. Only valid when the
-            # client shares a container with the VNC server; sudo is
-            # available passwordless in clouddesktop-desktop and -full.
+            # The dock's "Restart Desktop" button restarts this pod: the web
+            # client exits and the runtime starts the container again, so no
+            # configuration is needed. With the all-in-one image that also
+            # restarts the desktop; a VNC sidecar in a separate container is
+            # not affected. RESTART_CMD is a fallback consulted only outside a
+            # container (a dev checkout), so setting it here has no effect.
             # - name: RESTART_CMD
             #   value: "sudo pkill -USR1 Xtigervnc"
           securityContext:

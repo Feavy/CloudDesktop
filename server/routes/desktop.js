@@ -102,8 +102,10 @@ router.get('/config', (_req, res) => {
     desktopDir: DESKTOP_DIR,
     // External websocketify endpoint, or empty to use this server's bridge
     wsUrl: config.WS_URL,
-    // The dock only offers "restart" when the deployment told us how
-    canRestart: Boolean(config.RESTART_CMD),
+    // The dock only offers "restart" when it can actually do it: in a
+    // container the pod restarts itself, otherwise the deployment has to
+    // supply a command.
+    canRestart: config.IS_CONTAINER || Boolean(config.RESTART_CMD),
     canLaunch: availableApps,
   });
 });
@@ -167,19 +169,38 @@ router.post('/resolution', (req, res) => {
 
 // POST /api/desktop/restart
 //
-// There is no service manager inside the pod, so the command to cycle the VNC
-// server is supplied by the deployment (RESTART_CMD). Without it the dock
-// hides this action entirely.
+// Restarts the pod. Both shipped images run this web client as the process the
+// container runtime watches, so exiting is enough: entrypoint.sh waits on it
+// and exits when it goes (Dockerfile.full), and in the web-client-only image
+// it is PID 1 itself (Dockerfile.client). Kubernetes then starts the pod
+// again. The response goes out first on purpose — exiting before it leaves the
+// socket would reset the connection and look like a failure to the browser.
+//
+// Outside a container there is no pod to restart, so the deployment-supplied
+// RESTART_CMD still gets its chance; with neither the dock hides the button.
 router.post('/restart', (_req, res) => {
+  if (config.IS_CONTAINER) {
+    res.json({ ok: true, mode: 'pod' });
+    res.on('finish', () => {
+      // The short delay lets the response reach the browser before the
+      // process disappears.
+      setTimeout(() => {
+        console.log('Restart requested: exiting so the container runtime restarts the pod.');
+        process.exit(1);
+      }, 300);
+    });
+    return;
+  }
+
   if (!config.RESTART_CMD) {
-    return res.status(501).json({ error: 'Restart is not configured for this deployment' });
+    return res.status(501).json({ error: 'Restart is not available for this deployment' });
   }
 
   exec(config.RESTART_CMD, { env: X_ENV }, (err) => {
     if (err) {
       return res.status(500).json({ error: 'Failed to restart the desktop session' });
     }
-    res.json({ ok: true });
+    res.json({ ok: true, mode: 'command' });
   });
 });
 

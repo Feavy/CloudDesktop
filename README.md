@@ -250,8 +250,6 @@ it cannot fix as itself:
 - removing `/tmp/.X*-lock` files left behind by a previous container layer under
   a different uid
 - recreating `/tmp/.X11-unix` when `/tmp` arrives as a fresh `emptyDir` mount
-- `RESTART_CMD`, which can now recycle the VNC stack — set it to
-  `sudo pkill -USR1 Xtigervnc` to re-exec the X server in place
 
 `start-vnc` probes for working sudo once at startup and falls back to doing those
 steps unprivileged if it is unavailable, so removing the sudoers drop-in
@@ -350,11 +348,20 @@ All settings are environment variables.
 | `DISPLAY` | `:1` | X display used for `xrandr`/`xclip`/`wmctrl` |
 | `XAUTHORITY` | `$HOME/.Xauthority` | X authority file |
 | `HOME` | passwd entry | Base for `~/Desktop` and `~/Downloads` |
-| `RESTART_CMD` | *(unset)* | Command run by the dock's Restart button; unset hides the button |
+| `RESTART_CMD` | *(unset)* | Fallback restart command for non-container runs; not consulted in a pod |
 
-`RESTART_CMD` replaces the old `systemctl restart clouddesktop-vnc` call — there is no
-service manager in a container, so the deployment decides how to cycle the session. If
-you leave it unset the Restart button is hidden rather than failing.
+In a container the dock's Restart button restarts the pod by exiting: the web
+client stops, the entrypoint supervising it exits too, and the runtime starts
+the container again. Both the client image (where the server is PID 1) and the
+all-in-one image (where `entrypoint.sh` waits on it) are built for this, so it
+works with no configuration. With the all-in-one image that restarts the
+desktop as well; when the VNC server runs in a *separate* container of the same
+pod, only this container is restarted.
+
+`RESTART_CMD` is only consulted outside a container — a dev checkout — where
+there is no pod to restart; it replaces the old `systemctl restart
+clouddesktop-vnc` call. If neither applies, the button is hidden rather than
+failing.
 
 ---
 
@@ -426,7 +433,7 @@ All routes are unauthenticated; the reverse proxy gates them.
 | `GET` | `/api/desktop/config` | Home dir, VNC endpoint, which dock actions are available |
 | `GET`/`POST` | `/api/desktop/clipboard` | Read/write the X clipboard |
 | `POST` | `/api/desktop/resolution` | Set the X display size, generating a modeline with `cvt` if needed |
-| `POST` | `/api/desktop/restart` | Run `RESTART_CMD`; `501` if unconfigured |
+| `POST` | `/api/desktop/restart` | Restart the pod (the process exits so the runtime restarts it); falls back to `RESTART_CMD` outside a container, `501` if neither |
 | `GET` | `/api/desktop/stats` | CPU / RAM / disk |
 | `GET` | `/api/desktop/windows` | List open X windows (with `WM_CLASS` and the matched application id) |
 | `POST` | `/api/desktop/windows/focus` | Raise and focus a window |

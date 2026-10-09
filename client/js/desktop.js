@@ -510,8 +510,8 @@ const serverConfigReady = (async () => {
       if (cfg.desktopDir) SERVER_DESKTOP = cfg.desktopDir;
       if (cfg.wsUrl) SERVER_WS_URL = cfg.wsUrl;
 
-      // Restarting the desktop needs a command from the deployment; without
-      // one the pod has no way to do it, so hide the button.
+      // The pod restarts itself when we run in a container; otherwise the
+      // deployment has to supply a command. Without either, hide the button.
       CAN_RESTART = Boolean(cfg.canRestart);
       const btnRestart = document.getElementById('btn-restart');
       if (btnRestart) btnRestart.hidden = !CAN_RESTART;
@@ -656,12 +656,37 @@ document.getElementById('btn-keys').addEventListener('click', () => {
 
 // ── Restart desktop ─────────────────────────────────────────
 
+// The restart takes the whole pod down, so the HTTP server and the VNC backend
+// disappear together and come back a variable time later (XFCE has to start
+// again). Poll /health until it answers, then reconnect: a fixed delay either
+// fires while the pod is still down or leaves the user on a dead screen.
+async function waitForServerBack() {
+  // Let the outgoing process actually go first, so an early /health cannot be
+  // answered by the instance that is on its way out.
+  await new Promise((r) => setTimeout(r, 2500));
+  for (let i = 0; i < 80; i++) {           // ~2 minutes at 1.5s intervals
+    try {
+      const r = await fetch(`/health?_=${Date.now()}`,
+        { cache: 'no-store', credentials: 'same-origin' });
+      if (r.ok) return true;
+    } catch { /* still restarting */ }
+    await new Promise((r) => setTimeout(r, 1500));
+  }
+  return false;
+}
+
 document.getElementById('btn-restart').addEventListener('click', async () => {
-  if (!confirm('Restart the desktop session? Unsaved work will be lost.')) return;
+  if (!confirm('Restart the desktop? The pod restarts and unsaved work is lost.')) return;
   showStatus('Restarting desktop…');
-  try { await fetch('/api/desktop/restart', { method: 'POST', credentials: 'same-origin' }); }
-  catch { /* continue */ }
-  setTimeout(connect, 4500);
+  try {
+    await fetch('/api/desktop/restart', { method: 'POST', credentials: 'same-origin' });
+  } catch { /* the server exits mid-response — that is the restart */ }
+  const back = await waitForServerBack();
+  if (back) {
+    connect();
+  } else {
+    showStatus('The desktop did not come back — reload the page to retry.');
+  }
 });
 
 // ── Window switcher ─────────────────────────────────────────

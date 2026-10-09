@@ -880,8 +880,9 @@ chmod 1777 /tmp/.X11-unix
 #
 # This is what lets the desktop recover from things it cannot fix as itself:
 # stale /tmp/.X*-lock files left by a previous container layer under a
-# different uid, recreating /tmp/.X11-unix when /tmp arrives as a fresh mount,
-# and the web client's RESTART_CMD (recycling Xtigervnc and websockify).
+# different uid, and recreating /tmp/.X11-unix when /tmp arrives as a fresh
+# mount. (The web client's Restart button no longer needs it: the pod restarts
+# itself by exiting, rather than running a sudo command.)
 #
 # SECURITY: this is root-equivalent for anyone who can execute code as this
 # user. The web client exposes file download and directory browse over HTTP, so
