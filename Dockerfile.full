@@ -25,8 +25,12 @@ ENV DEBIAN_FRONTEND=noninteractive
 # and this costs seconds rather than the several minutes a from-scratch build
 # spends on the desktop. Keeping the call means install.sh stays the single
 # source of truth for the package set.
+#
+# DESKTOP_USER is already an ENV in the base image (Dockerfile.desktop), so it
+# is inherited and reused here -- an ARG of the same name would be shadowed by
+# it. The fallback only matters for a base built before that ENV existed.
 COPY install.sh /tmp/install.sh
-RUN bash /tmp/install.sh && rm -f /tmp/install.sh
+RUN DESKTOP_USER="${DESKTOP_USER:-ubuntu}" bash /tmp/install.sh && rm -f /tmp/install.sh
 
 # The web client itself
 WORKDIR /app
@@ -35,7 +39,8 @@ RUN cd server && npm ci --omit=dev && npm cache clean --force
 COPY server ./server
 COPY client ./client
 COPY deploy/entrypoint.sh /usr/local/bin/entrypoint
-RUN chmod +x /usr/local/bin/entrypoint
+COPY deploy/pivot-root.sh /usr/local/bin/pivot-root
+RUN chmod +x /usr/local/bin/entrypoint /usr/local/bin/pivot-root
 
 # Bake the cache-busting version and the build timestamp into the client.
 # CI passes GITHUB_RUN_NUMBER and the commit time; local builds fall back to
@@ -52,7 +57,8 @@ ENV NODE_ENV=production \
     PORT=3000 \
     DISPLAY=:1 \
     VNC_HOST=127.0.0.1 \
-    VNC_PORT=5900
+    VNC_PORT=5900 \
+    DESKTOP_USER=${DESKTOP_USER:-ubuntu}
 
 # HOME is not set here on purpose: entrypoint.sh derives it from the passwd
 # entry, so DESKTOP_USER stays the single place that decides which user we run
@@ -72,5 +78,10 @@ HEALTHCHECK --interval=30s --timeout=3s --start-period=120s --retries=3 \
 # .Xauthority that Xtigervnc wrote. Same uid, so that works.
 USER ubuntu
 
+# pivot-root is a pass-through unless PERSISTENT_ROOT_DIR is set, in which case
+# it pivot_roots into that directory before tini starts the desktop and the web
+# client; see deploy/pivot-root.sh. It exits with an explanation if the pod is
+# not privileged enough for that.
 # tini reaps the X, dbus and websockify children that the launcher forks
-ENTRYPOINT ["/usr/bin/tini", "--", "/usr/local/bin/entrypoint"]
+ENTRYPOINT ["/usr/local/bin/pivot-root"]
+CMD ["/usr/bin/tini", "--", "/usr/local/bin/entrypoint"]

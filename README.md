@@ -133,6 +133,7 @@ Extras:
 | `UNMINIMIZE` | `1` | Run the base image's stock `unminimize` at build time, restoring the man pages, docs and translation catalogs the minimized `ubuntu:24.04` image dpkg-strips (without them the desktop stays in English regardless of `LANG`/`LC_ALL`) |
 | `INSTALL_TOOLS` | `1` | Common Linux command-line tools: git, vim, nano, htop, tmux, jq, zip/unzip, rsync, net-tools, dnsutils, bash-completion, man pages and friends |
 | `EXTRA_LOCALES` | *(empty)* | Extra locales baked in at build time, space-separated (`--build-arg EXTRA_LOCALES="fr_FR.UTF-8 de_DE.UTF-8"`). Only `en_US.UTF-8` is generated otherwise; `start-vnc` also generates a missing session locale on the fly at startup |
+| `DESKTOP_USER` | `ubuntu` | Unprivileged user `install.sh` creates or reuses (with `DESKTOP_UID`/`DESKTOP_GID`). Exported into the image so the persistent-root entrypoint knows which user to drop back to after its root-only pivot |
 | `INSTALL_NODE` | `1` | Install Node.js from NodeSource (Ubuntu's own is 18, EOL). `Dockerfile.desktop` sets this to `0` |
 | `NODE_MAJOR` | `22` | NodeSource major version |
 | `INSTALL_THEME` | `1` | Theme the desktop with the [Orchis](https://github.com/vinceliuice/orchis-theme) GTK/xfwm4 theme in its **compact** flavour, matching Tela-circle icons, the Orchis wallpaper and a docked edge-to-edge panel. `0` keeps the stock XFCE look |
@@ -271,6 +272,67 @@ writable volume at `$HOME`: the file transfer API creates and writes
 plus `fsGroup: 1000`; swap in a PersistentVolumeClaim if uploaded files should
 survive a restart.
 
+### Persistent root filesystem
+
+By default everything the desktop writes goes to the container's writable layer,
+so a restart — or an image upgrade — starts from the image again. Set
+`PERSISTENT_ROOT_DIR` to a mounted volume and the image copies its own root
+filesystem into that volume once, then `pivot_root(2)`s into the copy before
+starting `tini`. Packages, `$HOME`, the XFCE session and everything else then
+live on the volume instead of the container layer:
+
+```yaml
+containers:
+  - name: desktop
+    image: ghcr.io/feavy/clouddesktop-full:latest
+    env:
+      - name: PERSISTENT_ROOT_DIR
+        value: /persist
+    securityContext:
+      # Required: the images run unprivileged on purpose, and these are what
+      # mount/pivot_root and the drop back to the desktop user need.
+      runAsUser: 0
+      runAsGroup: 0
+      appArmorProfile:
+        type: Unconfined
+      seccompProfile:
+        type: Unconfined
+      capabilities:
+        add: ["SYS_ADMIN", "SYS_CHROOT", "SETUID", "SETGID", "CHOWN"]
+    hostUsers: false          # on clusters that use user namespaces
+    volumeMounts:
+      - { name: rootfs, mountPath: /persist }
+volumes:
+  - name: rootfs
+    persistentVolumeClaim:
+      claimName: desktop-rootfs
+```
+
+How it behaves:
+
+- The first start **seeds** the volume with a copy of the image's root
+  filesystem (`tar --one-file-system`, so the volume itself and kubelet's other
+  mounts are skipped) and creates `<PERSISTENT_ROOT_DIR>/.seeded` when it is
+  done. Delete that marker to seed again; a re-seed overwrites the image's files
+  but does not delete files you added yourself.
+- On every start it remounts what the runtime provides inside the new root:
+  `/etc/hosts`, `/etc/resolv.conf`, `/etc/hostname`, the projected service
+  account token, plus `/proc`, `/sys`, `/dev` and fresh `tmpfs` mounts on `/tmp`
+  and `/run`. Any **other** volume mounted outside `PERSISTENT_ROOT_DIR` is not
+  visible after the pivot, so mount what you need inside it.
+- The pivot needs root, so the wrapper calls `setpriv` to drop back to
+  `DESKTOP_USER` (`ubuntu` by default) afterwards — the desktop itself still
+  never runs as root. Override the target with `PERSISTENT_ROOT_USER`, or set it
+  to `root` to deliberately stay root.
+- If any step fails — no `SYS_ADMIN`, a non-root `runAsUser`, an unwritable
+  volume — the entrypoint prints the `securityContext` and capability list above
+  and exits, rather than starting a desktop that silently is not persistent.
+
+This is implemented by `deploy/pivot-root.sh`, which is the ENTRYPOINT of both
+desktop images. With `PERSISTENT_ROOT_DIR` unset it is a pass-through to `tini`,
+so nothing changes for the default deployment. `clouddesktop-client` has no
+desktop and is unaffected.
+
 ### Deployment shapes
 
 **One container** — `clouddesktop-full`. Nothing to wire up:
@@ -350,6 +412,9 @@ All settings are environment variables.
 | `HOME` | passwd entry | Base for `~/Desktop` and `~/Downloads` |
 | `RESTART_CMD` | *(unset)* | Restart command used when there is no container to restart (a dev checkout) |
 | `RESTART_MODE` | `auto` | Force how the dock restarts: `auto`, `pod`, `session`, `command` or `off` |
+| `PERSISTENT_ROOT_DIR` | *(unset)* | Mounted volume to `pivot_root` into at startup, so the whole root filesystem persists; see [Persistent root filesystem](#persistent-root-filesystem) |
+| `PERSISTENT_ROOT_USER` | `DESKTOP_USER` (`ubuntu`) | User the entrypoint drops back to after the pivot; `root` to stay root on purpose |
+| `DESKTOP_USER` | `ubuntu` | Unprivileged user the desktop runs as, also the default `PERSISTENT_ROOT_USER` |
 
 The dock's Restart button uses whichever mechanism actually reaches the
 desktop. The server reports its choice as `restartMode` from
