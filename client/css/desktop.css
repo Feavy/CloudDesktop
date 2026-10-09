@@ -34,6 +34,11 @@
      drags meant for the remote desktop. */
   --dock-trigger-w: 20px;
   --dock-trigger-h: min(30vh, 240px);
+  /* Thickness of the marker pill. The pill is centred in the hotzone band,
+     so (--dock-trigger-w - --dock-trigger-pill) / 2 is how far it sits from
+     the page edge; the app dock uses the same figure so both markers line
+     up at the edge. */
+  --dock-trigger-pill: 4px;
 }
 
 [data-theme="light"] {
@@ -208,7 +213,7 @@ body.mobile-fullscreen #vnc-container { inset: 0 !important; }
 /* Marker pill — the same visual cue phones have always shown. */
 .dock-trigger::after {
   content: '';
-  width: 4px; height: 40px;
+  width: var(--dock-trigger-pill, 4px); height: 40px;
   background: var(--text-muted);
   opacity: 0.85;
   border-radius: 2px;
@@ -830,6 +835,7 @@ body.mobile-fullscreen #vnc-container { inset: 0 !important; }
        trigger rules below stretches it to the dock's own width too. */
     --dock-trigger-w: 24px;
     --dock-trigger-h: min(60vh, 360px);
+    --dock-trigger-pill: 5px;
   }
 
   /* ── Hide topbar on mobile — maximize VNC space ── */
@@ -913,7 +919,7 @@ body.mobile-fullscreen #vnc-container { inset: 0 !important; }
     /* invisible — it only enlarges the touch hitbox */
   }
   .dock-trigger::after {
-    width: 5px; height: 44px;
+    width: var(--dock-trigger-pill, 5px); height: 44px;
   }
 
   /* ── Bottom-sheet modals ── */

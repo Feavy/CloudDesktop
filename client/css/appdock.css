@@ -33,7 +33,10 @@
   content: '';
   width: 40px;
   height: 4px;
-  margin-bottom: 3px;
+  /* Same inset as the left dock's marker: its pill is centred in a
+     --dock-trigger-w band, which leaves (band - pill) / 2 of gap, so the two
+     markers sit the same distance from their page edge. */
+  margin-bottom: calc((var(--dock-trigger-w, 20px) - var(--dock-trigger-pill, 4px)) / 2);
   background: var(--text-muted);
   opacity: 0.85;
   border-radius: 2px;
