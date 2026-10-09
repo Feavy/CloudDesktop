@@ -1828,7 +1828,11 @@ if (isTouch) {
     const canvas = getCanvas();
     if (!canvas) return;
     const offX = canvas.offsetLeft, offY = canvas.offsetTop;
-    const cw = canvas.clientWidth, ch = canvas.clientHeight;
+    // The exact layout size, not clientWidth/clientHeight: those are rounded to
+    // whole pixels, which at a zoom picked to fit the width exactly would leave
+    // a sliver of margin down one edge.
+    const cw = parseFloat(canvas.style.width) || canvas.clientWidth;
+    const ch = parseFloat(canvas.style.height) || canvas.clientHeight;
     const winW = vncContainer.clientWidth / vncZoom;
     // Only the strip above the keyboard has to stay filled: everything below it
     // is covered, so blank space there is never seen.
@@ -1939,12 +1943,16 @@ if (isTouch) {
     const cRect = vncContainer.getBoundingClientRect();
     safeBottom = Math.max(0, Math.min(cRect.height, keyboard.visibleBottom() - cRect.top));
     const canvas = getCanvas();
-    // noVNC fits the whole desktop into the container; on a phone that is well
-    // under the remote's own pixels. Magnify to 1:1, where a remote pixel is a
-    // CSS pixel and text is as large as the remote drew it. Pinching still
-    // works from there.
+    // Magnify only as far as the page width allows. The whole width of the
+    // desktop has to stay on screen, or a line of text being typed runs off the
+    // edge -- so the scale to aim for is whatever puts the remote's full width
+    // across the page, edge to edge. That is still much larger than noVNC's fit
+    // wherever the fit is limited by height (Android, whose shorter viewport
+    // leaves the desktop letterboxed), and it is ~1 where the fit is already
+    // limited by width (iOS, which the keyboard does not shrink).
     const fit = canvasFit(canvas);
-    vncZoom = Math.max(MIN_ZOOM, Math.min(MAX_ZOOM, fit > 0 ? 1 / fit : 1));
+    const fullWidth = canvas && canvas.width ? vncContainer.clientWidth / canvas.width : fit;
+    vncZoom = Math.max(MIN_ZOOM, Math.min(MAX_ZOOM, fit > 0 ? fullWidth / fit : 1));
     // Android shrank the viewport for the keyboard on the way in and noVNC
     // re-fitted the desktop into what was left, which moved the desktop out from
     // under the arrow. Put the arrow back on the remote point it was on before
