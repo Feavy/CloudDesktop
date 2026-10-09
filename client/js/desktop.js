@@ -1614,6 +1614,15 @@ function autoFitResolution() {
     return Promise.resolve(null);
   }
 
+  // The soft keyboard is not a shape for the desktop to take, only something
+  // laid over it. Shrinking the remote to the strip left above it re-flows every
+  // window on the desktop each time the keyboard comes or goes, so the
+  // resolution is left exactly as it was and the client magnifies the region
+  // around the cursor instead -- see applyKeyboardZoom().
+  if (keyboard && keyboard.isOpen()) {
+    return Promise.resolve(null);
+  }
+
   // Measure the canvas, not the window: the topbar eats vertical space on
   // desktop, and on iOS --real-vh differs from window.innerHeight. Either way
   // the window is not the box the desktop is drawn into.
@@ -1665,8 +1674,19 @@ if (isTouch) {
   const mobileToolbar = document.getElementById('mobile-toolbar');
   const touchCursor   = document.getElementById('touch-cursor');
 
+  // ── Local zoom ──
+  // The magnified view is held as a window into the remote screen: the window's
+  // top-left corner in container coordinates, plus a scale factor. It is drawn
+  // with a CSS transform on the *canvas* rather than on the screen element it
+  // sits in, because noVNC measures that element to work out its own fit: a
+  // transformed box reads as a larger viewport, and the next resize would then
+  // fit the canvas to the magnified size on top of the transform.
   let vncZoom = 1;
-  let panX = 0.5, panY = 0.5;
+  let viewX = 0, viewY = 0;
+  // Lowest container y still visible above the soft keyboard and the
+  // special-keys bar floating on it. 0 while the keyboard is down, when the
+  // whole container is visible.
+  let safeBottom = 0;
 
   // ── Virtual cursor state (trackpad mode) ──
   let cursorX = window.innerWidth / 2;
@@ -1717,8 +1737,17 @@ if (isTouch) {
   function sendMouse(type, button, buttons, x = cursorX, y = cursorY) {
     const canvas = getCanvas();
     if (!canvas) return;
+    // noVNC reads a mouse position with clientToElement() against the canvas's
+    // *rendered* box, then divides by its own scale, which knows nothing about
+    // the magnifying transform. Feed it the position that point has in the
+    // canvas's unscaled box instead, so the framebuffer coordinate it derives
+    // is the one actually under the cursor. At 1:1 this is the identity.
+    const r = canvas.getBoundingClientRect();
+    const c = contentPoint(x, y);
+    const offX = canvas.offsetLeft, offY = canvas.offsetTop;
     canvas.dispatchEvent(new MouseEvent(type, {
-      clientX: x, clientY: y,
+      clientX: r.left + c.x - offX,
+      clientY: r.top + c.y - offY,
       screenX: x, screenY: y,
       button, buttons,
       bubbles: true, cancelable: true, view: window,
@@ -1731,6 +1760,7 @@ if (isTouch) {
     cursorY = Math.max(0, Math.min(window.innerHeight, y));
     updateCursorPos();
     sendMouse('mousemove', 0, isDragging ? 1 : 0);
+    followCursor();
   }
 
   // Click at a position (default: current cursor position)
@@ -1785,20 +1815,191 @@ if (isTouch) {
   }
 
   // ── Zoom ──
+  // The view model: a container point c is drawn at zoom * (c - view). The
+  // canvas keeps its own layout size and offset -- noVNC owns those -- so the
+  // transform has to fold its offset back in for `view` to mean container
+  // coordinates: with origin at the canvas's own corner, a canvas point p lands
+  // at offset + zoom * p + translate, and that has to equal zoom * (offset + p
+  // - view).
+  const MIN_ZOOM = 1;
+  const MAX_ZOOM = 3;
+
+  function clampView() {
+    const canvas = getCanvas();
+    if (!canvas) return;
+    const offX = canvas.offsetLeft, offY = canvas.offsetTop;
+    const cw = canvas.clientWidth, ch = canvas.clientHeight;
+    const winW = vncContainer.clientWidth / vncZoom;
+    // Only the strip above the keyboard has to stay filled: everything below it
+    // is covered, so blank space there is never seen.
+    const strip = safeBottom > 0 ? Math.min(safeBottom, vncContainer.clientHeight)
+                                 : vncContainer.clientHeight;
+    const winH = strip / vncZoom;
+    // A window wider than the canvas is centred on it rather than pinned to an
+    // edge, which is what the un-zoomed letterboxing looks like.
+    const spanX = cw - winW;
+    const spanY = ch - winH;
+    viewX = spanX <= 0 ? offX + spanX / 2 : Math.max(offX, Math.min(offX + spanX, viewX));
+    viewY = spanY <= 0 ? offY + spanY / 2 : Math.max(offY, Math.min(offY + spanY, viewY));
+  }
+
   function applyVncZoom() {
-    const screen = vncContainer.firstElementChild;
-    if (!screen) return;
+    const canvas = getCanvas();
+    if (!canvas) return;
     if (vncZoom > 1) {
-      screen.style.transformOrigin = `${panX * 100}% ${panY * 100}%`;
-      screen.style.transform = `scale(${vncZoom})`;
+      clampView();
+      const offX = canvas.offsetLeft, offY = canvas.offsetTop;
+      const tx = (vncZoom - 1) * offX - vncZoom * viewX;
+      const ty = (vncZoom - 1) * offY - vncZoom * viewY;
+      canvas.style.transformOrigin = '0 0';
+      canvas.style.transform = `translate(${tx}px, ${ty}px) scale(${vncZoom})`;
     } else {
-      screen.style.transform = '';
-      screen.style.transformOrigin = '';
-      panX = 0.5; panY = 0.5;
+      canvas.style.transform = '';
+      canvas.style.transformOrigin = '';
+      viewX = 0;
+      viewY = 0;
     }
   }
 
+  // Container coordinates of the remote screen point drawn under (x, y); the
+  // inverse of the mapping applyVncZoom draws.
+  function contentPoint(x, y) {
+    const r = vncContainer.getBoundingClientRect();
+    return { x: viewX + (x - r.left) / vncZoom,
+             y: viewY + (y - r.top) / vncZoom };
+  }
+
+  // noVNC's own scale: how many CSS pixels one remote pixel takes up. Read from
+  // the style width rather than clientWidth, which is rounded.
+  function canvasFit(canvas) {
+    if (!canvas || !canvas.width) return 1;
+    const css = parseFloat(canvas.style.width) || canvas.clientWidth;
+    return css > 0 ? css / canvas.width : 1;
+  }
+
+  // Remote-screen coordinate under the virtual cursor. The arrow is what drives
+  // the remote pointer, so this is derived from it -- but it is the thing that
+  // has to stay put whenever the view changes underneath for a reason that is
+  // not the user moving the arrow.
+  function cursorFramebuffer() {
+    const canvas = getCanvas();
+    if (!canvas || !canvas.width) return null;
+    const fit = canvasFit(canvas);
+    const c = contentPoint(cursorX, cursorY);
+    return { x: (c.x - canvas.offsetLeft) / fit, y: (c.y - canvas.offsetTop) / fit };
+  }
+
+  function placeCursorAtFramebuffer(fb) {
+    const canvas = getCanvas();
+    if (!canvas || !fb) return;
+    const fit = canvasFit(canvas);
+    placeCursorAt({ x: canvas.offsetLeft + fb.x * fit,
+                    y: canvas.offsetTop + fb.y * fit });
+  }
+
+  // Draw container point `content` at (tx, ty), and bring the virtual cursor
+  // along with it: the arrow has to keep pointing at the same remote spot, or
+  // the next click would land somewhere else than what it looks like it is on.
+  function parkContentAt(content, tx, ty) {
+    vncZoom = Math.max(MIN_ZOOM, Math.min(MAX_ZOOM, vncZoom));
+    viewX = content.x - tx / vncZoom;
+    viewY = content.y - ty / vncZoom;
+    applyVncZoom();
+    placeCursorAt(content);
+  }
+
+  function placeCursorAt(content) {
+    const r = vncContainer.getBoundingClientRect();
+    cursorX = r.left + vncZoom * (content.x - viewX);
+    cursorY = r.top + vncZoom * (content.y - viewY);
+    updateCursorPos();
+  }
+
+  // Zoom about a container point, keeping whatever is drawn under it in place.
+  function zoomAbout(cx, cy, next) {
+    next = Math.max(MIN_ZOOM, Math.min(MAX_ZOOM, next));
+    if (next === vncZoom) return;
+    viewX += cx / vncZoom - cx / next;
+    viewY += cy / vncZoom - cy / next;
+    vncZoom = next;
+  }
+
+  // ── Soft keyboard: magnify locally instead of reshaping the desktop ──
+  // With the keyboard up the remote resolution stays exactly what it was -- see
+  // autoFitResolution(). The desktop is not made smaller to fit the strip that
+  // is left; instead the client magnifies the region around the virtual cursor
+  // and slides it into that strip, so the field being typed into stays in view
+  // and legible.
+  const CURSOR_KEEP_PX = 24;   // how close to the bar the cursor may get
+  let viewBeforeKeyboard = null;
+  // Remote point under the arrow when the keyboard was summoned; see onWillOpen.
+  let fieldBeforeKeyboard = null;
+
+  function applyKeyboardZoom(fieldFb) {
+    const cRect = vncContainer.getBoundingClientRect();
+    safeBottom = Math.max(0, Math.min(cRect.height, keyboard.visibleBottom() - cRect.top));
+    const canvas = getCanvas();
+    // noVNC fits the whole desktop into the container; on a phone that is well
+    // under the remote's own pixels. Magnify to 1:1, where a remote pixel is a
+    // CSS pixel and text is as large as the remote drew it. Pinching still
+    // works from there.
+    const fit = canvasFit(canvas);
+    vncZoom = Math.max(MIN_ZOOM, Math.min(MAX_ZOOM, fit > 0 ? 1 / fit : 1));
+    // Android shrank the viewport for the keyboard on the way in and noVNC
+    // re-fitted the desktop into what was left, which moved the desktop out from
+    // under the arrow. Put the arrow back on the remote point it was on before
+    // that -- the field being typed into -- so the magnified view is centred on
+    // it rather than on wherever the re-fit left it.
+    if (fieldFb) placeCursorAtFramebuffer(fieldFb);
+    const content = contentPoint(cursorX, cursorY);
+    // Same column, middle of the strip: the field ends up under the eye, with
+    // as much of what surrounds it visible as the strip allows.
+    parkContentAt(content, cursorX - cRect.left, safeBottom / 2);
+  }
+
+  function restoreAfterKeyboard() {
+    safeBottom = 0;
+    const fb = cursorFramebuffer();
+    if (viewBeforeKeyboard) {
+      vncZoom = viewBeforeKeyboard.zoom;
+      viewX = viewBeforeKeyboard.x;
+      viewY = viewBeforeKeyboard.y;
+      viewBeforeKeyboard = null;
+      applyVncZoom();
+    }
+    // noVNC measures its fit from the screen element and skips the whole update
+    // when the client size matches the one it recorded at connect -- which is
+    // exactly what the keyboard closing looks like, since the viewport comes
+    // back to the size it had. Ask it to measure again, or the canvas is left
+    // scaled for the strip it no longer has. Re-assigning the property it
+    // already has is the public way to do that.
+    if (rfb) rfb.scaleViewport = true;
+    // The desktop has just been re-fitted around the arrow, so put the arrow
+    // back on the remote point it was pointing at.
+    if (fb) placeCursorAtFramebuffer(fb);
+  }
+
+  // Trackpad movement while the keyboard is up: the remote cursor follows the
+  // arrow, so an arrow that slips under the keyboard would hide the very thing
+  // being typed into. Recentring only once it reaches the bar leaves ordinary
+  // movement, and any manual pan, alone.
+  function followCursor() {
+    if (safeBottom <= 0) return;
+    const canvas = getCanvas();
+    if (!canvas) return;
+    const r = vncContainer.getBoundingClientRect();
+    if (cursorY - r.top <= safeBottom - CURSOR_KEEP_PX) return;
+    const content = contentPoint(cursorX, cursorY);
+    parkContentAt(content, cursorX - r.left, safeBottom / 2);
+  }
+
   document.getElementById('mob-zoom-fit').addEventListener('click', () => {
+    // While the keyboard is up, "fit" means the magnified strip view, not the
+    // whole desktop: the remote must not be reshaped for the keyboard.
+    if (keyboard && keyboard.isOpen()) {
+      applyKeyboardZoom();
+      return;
+    }
     vncZoom = 1;
     applyVncZoom();
     autoFitResolution();
@@ -1836,12 +2037,11 @@ if (isTouch) {
     return { x: (t0.clientX + t1.clientX) / 2, y: (t0.clientY + t1.clientY) / 2 };
   }
 
-  // Pan the magnified view so the point between the fingers follows them.
+  // Pan the magnified view so the point between the fingers follows them: the
+  // content moves with the fingers, so the window moves against them.
   function panBy(dx, dy) {
-    const cw = vncContainer.clientWidth;
-    const ch = vncContainer.clientHeight;
-    panX = Math.max(0, Math.min(1, panX - dx / (cw * Math.max(0.01, vncZoom - 1))));
-    panY = Math.max(0, Math.min(1, panY - dy / (ch * Math.max(0.01, vncZoom - 1))));
+    viewX -= dx / vncZoom;
+    viewY -= dy / vncZoom;
   }
 
   // ═══ TRACKPAD TOUCH HANDLING ═══
@@ -1944,7 +2144,11 @@ if (isTouch) {
 
       if (gestureMode === 'pinch') {
         if (lastDist > 0) {
-          vncZoom = Math.max(1, Math.min(3, vncZoom * (dist / lastDist)));
+          // Zoom about the point between the fingers, so what is under them
+          // stays under them.
+          const r = vncContainer.getBoundingClientRect();
+          zoomAbout(center.x - r.left, center.y - r.top,
+                    vncZoom * (dist / lastDist));
         }
         if (vncZoom > 1) panBy(center.x - lastCenter.x, center.y - lastCenter.y);
         applyVncZoom();
@@ -2091,12 +2295,26 @@ if (isTouch) {
   // mobile-keyboard.js for why.
   keyboard = createMobileKeyboard({
     getRfb: () => rfb,
+    // The remote point the arrow is on when the keyboard is summoned: on
+    // Android the viewport shrinks for it and noVNC re-fits the desktop, so by
+    // the time the keyboard has settled the arrow is over something else. This
+    // is the field being typed into, and what the magnified view centres on.
+    onWillOpen: () => { fieldBeforeKeyboard = cursorFramebuffer(); },
     onOpenChange: (isOpen) => {
-      // Fires once the keyboard has finished animating, in both directions:
-      // refit to the strip left above it while it is up, and back to the full
-      // viewport once it is gone. (On close this only happens after the
-      // viewport has finished growing back, so the refit cannot be measured
-      // against a size that is still moving.)
+      // Fires once the keyboard has finished animating, in both directions.
+      // Opening: remember the view and magnify around the cursor, so the field
+      // being typed into is not hidden behind the keyboard + special-keys bar.
+      // Closing: put the view back the way it was, then let the desktop refit
+      // to the viewport that has grown back.
+      if (isOpen) {
+        if (!viewBeforeKeyboard) {
+          viewBeforeKeyboard = { zoom: vncZoom, x: viewX, y: viewY };
+        }
+        applyKeyboardZoom(fieldBeforeKeyboard);
+        return;
+      }
+      fieldBeforeKeyboard = null;
+      restoreAfterKeyboard();
       scheduleAutoFit();
     },
   });

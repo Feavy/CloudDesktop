@@ -67,7 +67,7 @@ const SPECIAL_KEYS = [
 // Finger travel beyond which a press on the bar is a slide, not a tap.
 const SLIDE_SLOP_PX = 10;
 
-export function createMobileKeyboard({ getRfb, onOpenChange }) {
+export function createMobileKeyboard({ getRfb, onOpenChange, onWillOpen }) {
   let input = null;
   let open = false;
 
@@ -328,6 +328,18 @@ export function createMobileKeyboard({ getRfb, onOpenChange }) {
     bar.style.top = `${vv.offsetTop + vv.height}px`;
   }
 
+  // Lowest y, in viewport coordinates, that is still visible once the keyboard
+  // is up: the top edge of the special-keys bar, which is parked immediately
+  // above the keyboard and therefore covers the last of the strip. The bar is
+  // what a caller has to clear, not the keyboard, or the keys would sit on top
+  // of whatever it laid out there. Without the bar (or without a visual
+  // viewport to measure) the keyboard's own top edge is the answer.
+  function visibleBottom() {
+    if (bar && !bar.hidden) return bar.getBoundingClientRect().top;
+    const vv = window.visualViewport;
+    return vv ? vv.offsetTop + vv.height : window.innerHeight;
+  }
+
   function onKeyDown(e) {
     const rfb = getRfb();
     if (!rfb) return;
@@ -532,6 +544,11 @@ export function createMobileKeyboard({ getRfb, onOpenChange }) {
 
   function openKeyboard() {
     cancelSettle();
+    // Told before the OS keyboard is summoned and before anything about the
+    // viewport moves: on Android the layout viewport shrinks the moment it
+    // appears, and the caller has to note anything that depends on the height it
+    // is about to lose.
+    onWillOpen?.();
     // A reconnect mid-press replaces the RFB object; anything remembered from
     // the old session must not be released into the new one.
     held.clear();
@@ -603,6 +620,9 @@ export function createMobileKeyboard({ getRfb, onOpenChange }) {
     // settled -- up (strip above the keyboard) or down (full viewport) --
     // fitting is the caller's job and this says go ahead.
     blocksResize: () => !!openWatch || !!settle,
+    // Lowest y still visible above the keyboard and the special-keys bar; see
+    // visibleBottom above.
+    visibleBottom,
     open: openKeyboard,
     close: closeKeyboard,
     toggle: () => (open ? closeKeyboard() : openKeyboard()),
