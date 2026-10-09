@@ -1237,16 +1237,19 @@ svg.fs-icon-expand[hidden], svg.fs-icon-compress[hidden] { display: none; }
 
 .cursor-cross {
   display: block;
-  filter: drop-shadow(0 1px 2px rgba(0, 0, 0, 0.5));
+  filter: drop-shadow(0 1px 1px rgba(0, 0, 0, 0.45));
 }
 
-/* On touch devices noVNC cannot set a CSS cursor, so it draws the remote
-   cursor image on a fixed canvas appended to <body>, at its own z-index of
-   65535 -- which parks the remote pointer on top of every browser-side control
-   (toasts, docks, modals). Pull that layer below the client's UI, just under
-   the touch crosshair and still above the framebuffer. The framebuffer canvas
-   lives inside #vnc-container, so a body-level canvas is the cursor layer. */
-body > canvas { z-index: 700 !important; }
+/* On touch devices noVNC cannot set a CSS cursor, so it requests the RFB cursor
+   pseudo-encoding and paints the remote cursor -- arrow, I-beam, resize handle,
+   whatever the desktop would show -- on a fixed canvas appended to <body>. That
+   image lands on the same point as the trackpad crosshair and reads as a second
+   pointer on top of it (the desktop keeps its shape while the cross stays put,
+   which is the duplication). The crosshair *is* the mobile cursor, so drop the
+   remote image entirely: one pointer, and the pixel under it stays visible in
+   the open middle of the cross. The client's framebuffer canvas lives inside
+   #vnc-container, so a body-level canvas is the remote-cursor layer. */
+body > canvas { display: none !important; }
 
 /* VNC container clip when zoomed */
 #vnc-container { overflow: hidden; }
