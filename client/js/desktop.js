@@ -1659,7 +1659,6 @@ window.addEventListener('orientationchange', () => setTimeout(scheduleAutoFit, 3
 
 if (isTouch) {
   const mobileToolbar = document.getElementById('mobile-toolbar');
-  const touchCursor   = document.getElementById('touch-cursor');
 
   // ── Local zoom ──
   // The magnified view is held as a window into the remote screen: the window's
@@ -1702,11 +1701,36 @@ if (isTouch) {
   const DBL_CLICK_GAP_MS = 80;   // pause between the two clicks of a double-click
 
   mobileToolbar.hidden = false;
-  touchCursor.hidden = false; // Always visible in trackpad mode
+
+  // ── Remote cursor image ──
+  // On touch devices noVNC cannot set a CSS cursor, so it requests the RFB
+  // cursor pseudo-encoding and paints whatever shape the desktop sends -- arrow,
+  // I-beam, hand, resize grip -- onto a fixed canvas it appends to <body>. That
+  // image is the mobile pointer, and because the shape comes from the remote it
+  // changes with the element underneath on its own. It is also the only pointer
+  // on screen: the client used to draw its own arrow/crosshair on top, which
+  // just read as a duplicated cursor.
+  //
+  // noVNC anchors the image itself, which is right at 1:1 but drifts once the
+  // canvas carries the magnifying transform: what it is fed is the canvas-space
+  // coordinate its framebuffer maths needs, not the visual position. So learn
+  // the hot spot from noVNC's own placement and re-anchor the image on the
+  // tracked point. Re-anchoring from updateCursorPos() rather than only right
+  // after a send also keeps the pointer under the cursor when the view zooms or
+  // pans beneath it.
+  let cursorHotX = NaN, cursorHotY = NaN;
+
+  // The framebuffer canvas lives inside #vnc-container, so the body-level canvas
+  // noVNC creates is the cursor image.
+  function remoteCursorEl() {
+    return document.querySelector('body > canvas');
+  }
 
   function updateCursorPos() {
-    touchCursor.style.left = cursorX + 'px';
-    touchCursor.style.top  = cursorY + 'px';
+    const el = remoteCursorEl();
+    if (!el || !isFinite(cursorHotX)) return;
+    el.style.left = (cursorX - cursorHotX) + 'px';
+    el.style.top  = (cursorY - cursorHotY) + 'px';
   }
   updateCursorPos();
 
@@ -1732,13 +1756,31 @@ if (isTouch) {
     const r = canvas.getBoundingClientRect();
     const c = contentPoint(x, y);
     const offX = canvas.offsetLeft, offY = canvas.offsetTop;
+    // MouseEvent coordinates are integers, so round once here and use the same
+    // numbers both for the event and for the hot-spot read-back below.
+    const sentX = Math.round(r.left + c.x - offX);
+    const sentY = Math.round(r.top + c.y - offY);
     canvas.dispatchEvent(new MouseEvent(type, {
-      clientX: r.left + c.x - offX,
-      clientY: r.top + c.y - offY,
+      clientX: sentX,
+      clientY: sentY,
       screenX: x, screenY: y,
       button, buttons,
       bubbles: true, cancelable: true, view: window,
     }));
+    // A mousemove is what makes noVNC redraw its cursor image, so this is the
+    // moment to read back where it put it and work out the hot spot: the image
+    // lands at (sentX - hotX), so the hot spot is the difference. Then put it
+    // back on the tracked point; see updateCursorPos().
+    if (type === 'mousemove') {
+      const el = remoteCursorEl();
+      const left = el ? parseFloat(el.style.left) : NaN;
+      const top  = el ? parseFloat(el.style.top)  : NaN;
+      if (isFinite(left) && isFinite(top)) {
+        cursorHotX = sentX - left;
+        cursorHotY = sentY - top;
+        updateCursorPos();
+      }
+    }
   }
 
   // Move virtual cursor and send mousemove to VNC

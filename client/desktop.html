@@ -63,20 +63,11 @@
     </button>
   </div>
 
-  <!-- Virtual mouse pointer (always visible on touch devices). It is the only
-       cursor on screen -- noVNC's own remote-cursor image is suppressed in
-       desktop.css, because a second pointer drawn at the same spot reads as a
-       duplicated cursor. A slim crosshair marks the position without competing
-       with the desktop underneath, and its open middle keeps the pixel being
-       pointed at visible. -->
-  <div id="touch-cursor" class="touch-cursor" hidden>
-    <svg class="cursor-cross" viewBox="0 0 16 16" width="16" height="16" aria-hidden="true">
-      <g fill="none" stroke-linecap="round">
-        <path d="M8 1.5v4.5M8 10v4.5M1.5 8h4.5M10 8h4.5" stroke="rgba(0, 0, 0, 0.5)" stroke-width="3"/>
-        <path d="M8 1.5v4.5M8 10v4.5M1.5 8h4.5M10 8h4.5" stroke="rgba(255, 255, 255, 0.9)" stroke-width="1.25"/>
-      </g>
-    </svg>
-  </div>
+  <!-- The mobile pointer is noVNC's own copy of the desktop cursor: a normal
+       arrow that becomes an I-beam over text, a hand over links, a resize grip
+       on a window edge, and so on, because the shape comes from the remote.
+       desktop.js anchors that image on the trackpad point and desktop.css keeps
+       it below the client's own controls; see both for the details. -->
 
   <!-- Drop overlay -->
   <div id="drop-overlay" class="drop-overlay" hidden>
