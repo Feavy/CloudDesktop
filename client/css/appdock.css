@@ -399,6 +399,39 @@
   font-weight: 450;
 }
 
+/* One window row: the focus button takes the width, the minimize control
+   rides at its trailing edge. */
+.app-ctx-row {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+}
+
+.app-ctx-row .app-ctx-item {
+  flex: 1;
+  min-width: 0;
+}
+
+.app-ctx-min {
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  border: none;
+  border-radius: 8px;
+  background: none;
+  color: var(--text-muted);
+  cursor: pointer;
+  transition: background 0.12s, color 0.12s;
+}
+
+.app-ctx-min:hover { background: var(--dock-hover); color: var(--text); }
+.app-ctx-min:active { filter: brightness(0.82); }
+.app-ctx-min svg { width: 15px; height: 15px; }
+
 .app-ctx-sep {
   height: 1px;
   margin: 4px 6px;
@@ -504,6 +537,6 @@
   }
 }
 
-.app-dock-item, .apps-tile, .apps-chip, .apps-close-btn, .app-ctx-item {
+.app-dock-item, .apps-tile, .apps-chip, .apps-close-btn, .app-ctx-item, .app-ctx-min {
   touch-action: manipulation;
 }

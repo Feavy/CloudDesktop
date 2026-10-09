@@ -430,6 +430,7 @@ All routes are unauthenticated; the reverse proxy gates them.
 | `GET` | `/api/desktop/stats` | CPU / RAM / disk |
 | `GET` | `/api/desktop/windows` | List open X windows (with `WM_CLASS` and the matched application id) |
 | `POST` | `/api/desktop/windows/focus` | Raise and focus a window |
+| `POST` | `/api/desktop/windows/minimize` | Minimize a window (`wmctrl -b add,hidden`) |
 | `POST` | `/api/desktop/windows/close` | Ask a window to close (`wmctrl -ic`) |
 | `GET` | `/api/desktop/apps` | Installed applications (XDG `.desktop` entries) |
 | `GET` | `/api/desktop/apps/icon/:id` | Resolved theme icon for an application (`?size=48`) |

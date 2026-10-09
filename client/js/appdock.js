@@ -4,7 +4,7 @@
 // running but unpinned, then the button that opens the applications grid.
 // Running applications carry a dot; clicking activates (focuses a window
 // or launches); right-click / long-press opens a context menu with
-// per-window focus, pin/unpin and "close all".
+// per-window focus and minimize, pin/unpin, "minimize all" and "close all".
 //
 // Server side this leans on:
 //   GET  /api/desktop/apps           installed applications
@@ -12,13 +12,15 @@
 //   POST /api/desktop/apps/launch    launch by application id
 //   GET/PUT /api/desktop/apps/pins   the dock's pin list
 //   GET     /api/desktop/windows     open windows (+ appId per window)
-//   POST    /api/desktop/windows/*   focus / close
+//   POST    /api/desktop/windows/*   focus / minimize / close
 
 import { notify } from '/js/notifications.js?cv=%CACHE_VERSION%';
 
 const FALLBACK_ICON_SVG = '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><rect x="2" y="3" width="12" height="10" rx="2"/><line x1="2" y1="6" x2="14" y2="6"/></svg>';
 
 const GRID_ICON_SVG = '<svg viewBox="0 0 22 22" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"><rect x="3" y="3" width="7" height="7" rx="1.6"/><rect x="12" y="3" width="7" height="7" rx="1.6"/><rect x="3" y="12" width="7" height="7" rx="1.6"/><rect x="12" y="12" width="7" height="7" rx="1.6"/></svg>';
+
+const MINIMIZE_ICON_SVG = '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"><line x1="4" y1="11" x2="12" y2="11"/></svg>';
 
 // ── Elements ────────────────────────────────────────────────
 
@@ -210,6 +212,20 @@ async function closeAppWindows(id) {
   schedulePoll(600);
 }
 
+// Minimize one window. Clicking it in the dock afterwards focuses it again
+// (wmctrl -a clears _NET_WM_STATE_HIDDEN), so there is no restore action.
+async function minimizeWindow(winId) {
+  try { await jsonFetch('/api/desktop/windows/minimize', 'POST', { id: winId }); } catch { /* silent */ }
+  schedulePoll(600);
+}
+
+async function minimizeAppWindows(id) {
+  const wins = windowsByApp().get(id) || [];
+  await Promise.all(wins.map((w) =>
+    jsonFetch('/api/desktop/windows/minimize', 'POST', { id: w.id }).catch(() => {})));
+  schedulePoll(600);
+}
+
 function togglePin(id) {
   const i = pins.indexOf(id);
   if (i >= 0) pins.splice(i, 1);
@@ -352,6 +368,40 @@ function addCtxItem(label, { danger = false, onClick = null } = {}) {
   ctxMenu.appendChild(btn);
 }
 
+// One window row: the title focuses the window, and a trailing control
+// minimizes just that one. The row has to be a div rather than a button,
+// since it holds the second button.
+function addWindowCtxItem(win, appId) {
+  const row = document.createElement('div');
+  row.className = 'app-ctx-row';
+
+  const focusBtn = document.createElement('button');
+  focusBtn.type = 'button';
+  focusBtn.className = 'app-ctx-item';
+  const title = document.createElement('span');
+  title.className = 'app-ctx-win-title';
+  title.textContent = win.title;
+  focusBtn.appendChild(title);
+  focusBtn.addEventListener('click', () => {
+    closeCtxMenu();
+    focusWindow(win.id, appId);
+  });
+
+  const minBtn = document.createElement('button');
+  minBtn.type = 'button';
+  minBtn.className = 'app-ctx-min';
+  minBtn.title = 'Minimize';
+  minBtn.setAttribute('aria-label', `Minimize ${win.title}`);
+  minBtn.innerHTML = MINIMIZE_ICON_SVG;
+  minBtn.addEventListener('click', () => {
+    closeCtxMenu();
+    minimizeWindow(win.id);
+  });
+
+  row.append(focusBtn, minBtn);
+  ctxMenu.appendChild(row);
+}
+
 function placeCtxMenu(x, y) {
   ctxMenu.hidden = false;
   menuOpenedAt = Date.now();
@@ -380,11 +430,12 @@ function openAppMenu(appId, x, y) {
   ctxMenu.appendChild(header);
 
   for (const w of wins.slice(0, 8)) {
-    addCtxItem(w.title, { onClick: () => focusWindow(w.id, appId) });
+    addWindowCtxItem(w, appId);
   }
   if (wins.length) addCtxSep();
   addCtxItem('Open New Window', { onClick: () => launchApp(appId) });
   addCtxItem(pinned ? 'Unpin from Dock' : 'Pin to Dock', { onClick: () => togglePin(appId) });
+  if (wins.length) addCtxItem('Minimize All Windows', { onClick: () => minimizeAppWindows(appId) });
   if (wins.length) addCtxItem('Close All Windows', { danger: true, onClick: () => closeAppWindows(appId) });
 
   placeCtxMenu(x, y);

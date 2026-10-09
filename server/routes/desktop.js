@@ -490,6 +490,25 @@ router.post('/windows/close', (req, res) => {
   });
 });
 
+// POST /api/desktop/windows/minimize — iconify a window
+//
+// _NET_WM_STATE_HIDDEN is the state the WM sets on an iconified window, and
+// xfwm4 accepts it from a client too (wmctrl -b add,hidden), so no separate
+// "restore" route is needed: /windows/focus raises and focuses the window,
+// which clears the flag and brings it back.
+router.post('/windows/minimize', (req, res) => {
+  const { id } = req.body;
+  if (!id || typeof id !== 'string' || !/^0x[\da-f]+$/i.test(id)) {
+    return res.status(400).json({ error: 'Invalid window id' });
+  }
+  execFile('wmctrl', ['-i', '-r', id, '-b', 'add,hidden'], { env: X_ENV }, (err) => {
+    if (err) {
+      return res.status(500).json({ error: 'Failed to minimize window' });
+    }
+    res.json({ ok: true });
+  });
+});
+
 // ── Chunked Upload Endpoints ───────────────────────────────
 
 // POST /api/desktop/upload/init — start chunked upload
