@@ -658,12 +658,6 @@ document.querySelectorAll('.res-btn').forEach((btn) => {
   });
 });
 
-// ── Send Ctrl+Alt+Del ───────────────────────────────────────
-
-document.getElementById('btn-keys').addEventListener('click', () => {
-  if (rfb) rfb.sendCtrlAltDel();
-});
-
 // ── Restart desktop ─────────────────────────────────────────
 
 // The restart takes the whole pod down, so the HTTP server and the VNC backend
@@ -791,16 +785,9 @@ async function refreshWindowList() {
   } catch { /* silent */ }
 }
 
-document.getElementById('btn-windows').addEventListener('click', (e) => {
-  e.stopPropagation();
-  const wasHidden = windowList.hidden;
-  windowList.hidden = !wasHidden;
-  if (wasHidden) refreshWindowList();
-});
-
 // Close window list on outside click
 document.addEventListener('click', (e) => {
-  if (!windowList.hidden && !windowList.contains(e.target) && e.target.id !== 'btn-windows') {
+  if (!windowList.hidden && !windowList.contains(e.target)) {
     windowList.hidden = true;
   }
 });

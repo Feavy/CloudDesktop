@@ -230,9 +230,9 @@ body.mobile-fullscreen #vnc-container { inset: 0 !important; }
    Dock — vertical control strip on the left edge
 
    This strip holds only the web client's controls (upload, download,
-   resolution, fullscreen, window switcher, Ctrl+Alt+Del, restart,
-   settings). Application launching lives in the app dock at the bottom
-   of the page (appdock.css), which replaced the desktop's Plank dock.
+   resolution, fullscreen, restart, settings). Application launching lives
+   in the app dock at the bottom of the page (appdock.css), which replaced
+   the desktop's Plank dock.
    ═══════════════════════════════════════════════════════════ */
 .dock {
   position: fixed;
