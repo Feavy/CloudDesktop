@@ -12,14 +12,17 @@
    A band centred on the bottom edge, not the full edge, so drags and taps
    meant for the remote desktop keep working along the rest of it — the
    same trade-off the left dock's trigger makes. The ::after pill is the
-   marker that tells you where the dock is parked. */
+   marker that tells you where the dock is parked. On phones an invisible
+   ::before knob enlarges the touch target, mirroring the left dock. */
 .app-dock-trigger {
   position: fixed;
   bottom: 0;
   left: 50%;
   transform: translateX(-50%);
   width: min(46vw, 420px);
-  height: 18px;
+  /* Depth of the bottom-edge hotzone; phones enlarge it via the variable
+     (and the safe-area rule adds the home-indicator inset on top). */
+  height: var(--app-dock-trigger-h, 18px);
   z-index: 799;
   display: flex;
   align-items: flex-end;
@@ -449,7 +452,25 @@
 
   /* The trigger must not fight the remote desktop for the whole edge: a
      narrower band than on desktop, where the pointer is precise. */
-  .app-dock-trigger { width: min(60vw, 300px); height: 20px; }
+  .app-dock-trigger { width: min(60vw, 300px); --app-dock-trigger-h: 24px; }
+
+  /* Dock trigger: pill indicator on the bottom edge, with a much larger
+     touch target than the visible sliver suggests — the same treatment the
+     left dock's trigger gets on phones.
+     - The element is a centred band (min(60vw, 300px) × 24px), not the full
+       edge, so taps elsewhere reach the remote desktop.
+     - ::before stretches that band to the dock's own height, so the open
+       dock always covers the enlarged target instead of leaving a sliver. */
+  .app-dock-trigger::before {
+    content: '';
+    position: absolute;
+    left: 0; right: 0; bottom: 0;
+    /* Matches the dock's own height (item size + padding), so the open dock
+       always covers the enlarged touch target instead of leaving a sliver. */
+    height: calc(var(--dock-item-sz) + 10px);
+    /* invisible — it only enlarges the touch hitbox */
+  }
+
   .app-dock-trigger::after { width: 34px; height: 4px; }
 
   .apps-card { padding: 16px; }
@@ -479,7 +500,7 @@
     bottom: calc(6px + env(safe-area-inset-bottom, 0px));
   }
   .app-dock-trigger {
-    height: calc(18px + env(safe-area-inset-bottom, 0px));
+    height: calc(var(--app-dock-trigger-h, 18px) + env(safe-area-inset-bottom, 0px));
   }
 }
 
