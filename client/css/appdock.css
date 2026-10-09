@@ -474,14 +474,13 @@
 
 @media (max-width: 600px) {
   .app-dock {
-    /* Phones pin the left dock flush to the left edge, so the app dock sits
-       flush to the bottom edge too, squared off on that side to match. */
+    /* Same 6px gap as the left dock keeps on phones, so neither panel
+       touches the edge and both stay fully rounded. */
     bottom: var(--dock-edge-gap, 6px);
     max-width: calc(100vw - 12px);
     padding: 5px 6px;
     gap: 1px;
-    border-radius: 18px 18px 0 0;
-    border-bottom: none;
+    border-radius: 18px;
     overflow-x: auto;
     overflow-y: hidden;
     scrollbar-width: none;

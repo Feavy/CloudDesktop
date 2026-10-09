@@ -40,8 +40,9 @@
      up at the edge. */
   --dock-trigger-pill: 4px;
   /* How far both dock panels sit from the page edge they are parked on:
-     the left dock's `left`, the app dock's `bottom`. Phones pin the left
-     dock flush to the edge, so they pin the app dock flush too. */
+     the left dock's `left`, the app dock's `bottom`. One value for both
+     docks at every breakpoint, so neither panel touches the edge and the
+     two stay visually in step. */
   --dock-edge-gap: 6px;
 }
 
@@ -842,7 +843,6 @@ body.mobile-fullscreen #vnc-container { inset: 0 !important; }
     --dock-trigger-w: 24px;
     --dock-trigger-h: min(60vh, 360px);
     --dock-trigger-pill: 5px;
-    --dock-edge-gap: 0px;
   }
 
   /* ── Hide topbar on mobile — maximize VNC space ── */
@@ -859,9 +859,11 @@ body.mobile-fullscreen #vnc-container { inset: 0 !important; }
   .dock {
     left: var(--dock-edge-gap, 6px);
     top: 50%;
-    transform: translateY(-50%) translateX(calc(-100% - 4px));
-    border-radius: 0 14px 14px 0;
-    border-left: none;
+    /* Parked fully clear of the gap, otherwise a sliver of the panel stays
+       on screen while it is meant to be hidden. */
+    transform: translateY(-50%) translateX(calc(-100% - 12px));
+    /* No flush-drawer overrides: the panel floats 6px off the edge like it
+       does on desktop, so it keeps its full radius and border. */
     max-height: calc(100vh - 16px);
     overflow-y: auto;
     overflow-x: hidden;
