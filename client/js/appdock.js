@@ -28,9 +28,9 @@ const CLOSE_ICON_SVG = '<svg viewBox="0 0 16 16" fill="none" stroke="currentColo
 // Bulk window actions that sit beside the Apps button: a window collapsing
 // downwards (minimize all) and a window being dismissed (close all). Both
 // reuse the grid button's 22px canvas so the trailing group stays uniform.
-const MINIMIZE_ALL_ICON_SVG = '<svg viewBox="0 0 22 22" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="16" height="10" rx="2"/><line x1="3" y1="6.4" x2="19" y2="6.4"/><line x1="11" y1="14.5" x2="11" y2="19"/><path d="M8.6 16.6 11 19l2.4-2.4"/></svg>';
+const MINIMIZE_ALL_ICON_SVG = '<svg width="22" height="22" viewBox="0 0 22 22" fill="none" xmlns="http://www.w3.org/2000/svg"><path d="M18.3333 1.83301H7.33325C6.32492 1.83301 5.49992 2.65801 5.49992 3.66634V14.6663C5.49992 15.6838 6.32492 16.4997 7.33325 16.4997H18.3333C19.3508 16.4997 20.1666 15.6838 20.1666 14.6663V3.66634C20.1666 2.65801 19.3508 1.83301 18.3333 1.83301ZM18.3333 14.6663H7.33325V3.66634H18.3333V14.6663ZM3.66659 5.49967V18.333H16.4999V20.1663H3.66659C2.65825 20.1663 1.83325 19.3505 1.83325 18.333V5.49967H3.66659Z" fill="black"/><rect x="9.16675" y="11" width="7.33333" height="1.83333" fill="black"/></svg>';
 
-const CLOSE_ALL_ICON_SVG = '<svg viewBox="0 0 22 22" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="16" height="16" rx="2"/><line x1="3" y1="6.4" x2="19" y2="6.4"/><line x1="8.3" y1="9.6" x2="13.7" y2="14.9"/><line x1="13.7" y1="9.6" x2="8.3" y2="14.9"/></svg>';
+const CLOSE_ALL_ICON_SVG = '<svg width="22" height="22" viewBox="0 0 22 22" fill="none" xmlns="http://www.w3.org/2000/svg"><path d="M18.3333 1.83301H7.33325C6.32492 1.83301 5.49992 2.65801 5.49992 3.66634V14.6663C5.49992 15.6838 6.32492 16.4997 7.33325 16.4997H18.3333C19.3508 16.4997 20.1666 15.6838 20.1666 14.6663V3.66634C20.1666 2.65801 19.3508 1.83301 18.3333 1.83301ZM18.3333 14.6663H7.33325V3.66634H18.3333V14.6663ZM3.66659 5.49967V18.333H16.4999V20.1663H3.66659C2.65825 20.1663 1.83325 19.3505 1.83325 18.333V5.49967H3.66659ZM8.95575 11.7697L11.5499 9.16634L8.95575 6.55384L10.2391 5.27051L12.8333 7.88301L15.4366 5.28884L16.7199 6.57217L14.1166 9.16634L16.7108 11.7697L15.4274 13.053L12.8333 10.4497L10.2391 13.053L8.95575 11.7697Z" fill="black"/></svg>';
 
 // ── Elements ────────────────────────────────────────────────
 
@@ -508,10 +508,10 @@ function openAppMenu(appId, x, y) {
     addWindowCtxItem(w, appId);
   }
   if (wins.length) addCtxSep();
-  addCtxItem('Open New Window', { onClick: () => launchApp(appId) });
+  addCtxItem('Open New', { onClick: () => launchApp(appId) });
   addCtxItem(pinned ? 'Unpin from Dock' : 'Pin to Dock', { onClick: () => togglePin(appId) });
-  if (wins.length) addCtxItem('Minimize All Windows', { onClick: () => minimizeAppWindows(appId) });
-  if (wins.length) addCtxItem('Close All Windows', { danger: true, onClick: () => closeAppWindows(appId) });
+  if (wins.length) addCtxItem('Minimize All', { onClick: () => minimizeAppWindows(appId) });
+  if (wins.length) addCtxItem('Close All', { danger: true, onClick: () => closeAppWindows(appId) });
 
   placeCtxMenu(x, y);
 }
