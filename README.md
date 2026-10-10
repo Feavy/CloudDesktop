@@ -246,6 +246,9 @@ strip, and shows:
 - An **Apps** button that opens the applications grid: every installed
   application as a tile, with search, an *All / Running* filter and a dot on
   every running app.
+- **Minimize All** and **Close All** buttons beside it, acting on every open
+  window rather than one application's. *Close All* asks for confirmation
+  first, and both are dimmed while the desktop has no windows.
 
 Running state comes from `wmctrl`'s window list: each window's `WM_CLASS` is
 matched against the application registry (`StartupWMClass`, the `Exec` basename

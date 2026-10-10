@@ -119,6 +119,18 @@
 .app-dock-item:hover { background: var(--dock-hover); }
 .app-dock-item:active { filter: brightness(0.82); }
 
+/* Bulk window actions (Minimize All / Close All) have nothing to act on
+   before the first window poll returns, or once the desktop is empty. They
+   stay in the dock so the layout never jumps, but read as unavailable and
+   never take a hover tile. */
+.app-dock-item:disabled {
+  opacity: 0.32;
+  cursor: default;
+}
+
+.app-dock-item:disabled:hover { background: transparent; }
+.app-dock-item:disabled:active { filter: none; }
+
 .app-dock-item svg {
   width: 20px;
   height: 20px;

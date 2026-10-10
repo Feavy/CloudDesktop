@@ -25,6 +25,13 @@ const MINIMIZE_ICON_SVG = '<svg viewBox="0 0 16 16" fill="none" stroke="currentC
 
 const CLOSE_ICON_SVG = '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"><line x1="4.5" y1="4.5" x2="11.5" y2="11.5"/><line x1="11.5" y1="4.5" x2="4.5" y2="11.5"/></svg>';
 
+// Bulk window actions that sit beside the Apps button: a window collapsing
+// downwards (minimize all) and a window being dismissed (close all). Both
+// reuse the grid button's 22px canvas so the trailing group stays uniform.
+const MINIMIZE_ALL_ICON_SVG = '<svg viewBox="0 0 22 22" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="16" height="10" rx="2"/><line x1="3" y1="6.4" x2="19" y2="6.4"/><line x1="11" y1="14.5" x2="11" y2="19"/><path d="M8.6 16.6 11 19l2.4-2.4"/></svg>';
+
+const CLOSE_ALL_ICON_SVG = '<svg viewBox="0 0 22 22" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="16" height="16" rx="2"/><line x1="3" y1="6.4" x2="19" y2="6.4"/><line x1="8.3" y1="9.6" x2="13.7" y2="14.9"/><line x1="13.7" y1="9.6" x2="8.3" y2="14.9"/></svg>';
+
 // ── Elements ────────────────────────────────────────────────
 
 const appDock        = document.getElementById('app-dock');
@@ -236,6 +243,31 @@ async function closeWindow(winId) {
   schedulePoll(600);
 }
 
+// ── Bulk window actions (dock buttons) ──────────────────────
+
+// The dock's global buttons act on every open window, not just the ones the
+// app registry managed to map: that is the same list the window switcher
+// shows, and the only sensible reading of "all running windows".
+async function minimizeAllWindows() {
+  if (!windows.length) return;
+  await Promise.all(windows.map((w) =>
+    jsonFetch('/api/desktop/windows/minimize', 'POST', { id: w.id }).catch(() => {})));
+  schedulePoll(600);
+}
+
+// Closing every window is destructive and irreversible, so it asks first —
+// the same native confirm the session restart uses. The count is in the
+// prompt so the dialog says exactly what is about to happen.
+async function closeAllWindows() {
+  const count = windows.length;
+  if (!count) return;
+  const noun = count === 1 ? 'window' : 'windows';
+  if (!confirm(`Close all ${count} running ${noun}? Unsaved work will be lost.`)) return;
+  await Promise.all(windows.map((w) =>
+    jsonFetch('/api/desktop/windows/close', 'POST', { id: w.id }).catch(() => {})));
+  schedulePoll(600);
+}
+
 function togglePin(id) {
   const i = pins.indexOf(id);
   if (i >= 0) pins.splice(i, 1);
@@ -272,6 +304,21 @@ function gridButton() {
   return btn;
 }
 
+// A trailing dock button that acts on the whole desktop. It always stays in
+// place — so the dock layout never jumps — but reads as unavailable while
+// there is nothing to act on.
+function dockActionButton(id, label, svg, disabled) {
+  const btn = document.createElement('button');
+  btn.type = 'button';
+  btn.id = id;
+  btn.className = 'dock-item app-dock-item app-dock-action';
+  btn.dataset.label = label;
+  btn.setAttribute('aria-label', label);
+  btn.innerHTML = svg;
+  if (disabled) btn.disabled = true;
+  return btn;
+}
+
 function renderDock() {
   const byApp = windowsByApp();
   const pinnedShown = pins.filter((id) => appsById.has(id));
@@ -291,6 +338,13 @@ function renderDock() {
     frag.appendChild(sep);
   }
   frag.appendChild(gridButton());
+  // Bulk window actions ride beside the Apps button; they are dimmed until
+  // the first window poll finds something to act on.
+  const noWindows = windows.length === 0;
+  frag.appendChild(dockActionButton('btn-minimize-all', 'Minimize All Windows',
+    MINIMIZE_ALL_ICON_SVG, noWindows));
+  frag.appendChild(dockActionButton('btn-close-all', 'Close All Windows',
+    CLOSE_ALL_ICON_SVG, noWindows));
   appDock.replaceChildren(frag);
 }
 
@@ -613,6 +667,10 @@ export function initAppDock(options = {}) {
     if (!item || clickSuppressed()) return;
     if (item.id === 'btn-appview') {
       openAppsView();
+    } else if (item.id === 'btn-minimize-all') {
+      minimizeAllWindows();
+    } else if (item.id === 'btn-close-all') {
+      closeAllWindows();
     } else if (item.dataset.app) {
       activateApp(item.dataset.app);
     }
