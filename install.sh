@@ -240,7 +240,7 @@ check_bin dbus-launch dbus-x11
 log "X tooling verified (xrandr, cvt, xclip, wmctrl, xauth, xdpyinfo, dbus-launch)"
 
 # ─────────────────────────────────────────────────────────────────────────────
-# 6. TigerVNC + websockify
+# 6. TigerVNC, websockify and desktop audio
 # ─────────────────────────────────────────────────────────────────────────────
 log "Installing TigerVNC and websockify"
 apt-get install -y -qq --no-install-recommends \
@@ -249,9 +249,32 @@ apt-get install -y -qq --no-install-recommends \
     websockify
 
 check_bin Xtigervnc   tigervnc-standalone-server
-check_bin vncconfig  tigervnc-common
-check_bin websockify websockify
+check_bin vncconfig   tigervnc-common
+check_bin websockify  websockify
 log "Xtigervnc: $(Xtigervnc -version 2>&1 | head -1)"
+
+# Desktop audio.
+#
+# A container has no sound card, so the XFCE session starts PulseAudio and
+# gives it a virtual sink (see xfce-vnc-session below); everything the desktop
+# plays lands on that sink's monitor, and the web client captures it with
+# parec and streams it to the browser over /audio. Without these packages the
+# session has no audio at all and the web client's endpoint has no source,
+# which is exactly the "no sound in the browser" this installs against.
+#
+# pulseaudio-utils is what carries parec and pactl. It is a dependency of
+# pulseaudio, but named explicitly because it is the binary the web client
+# spawns and a future packaging change that dropped the dependency would
+# otherwise silently take the audio feature with it.
+log "Installing PulseAudio (desktop audio)"
+apt-get install -y -qq --no-install-recommends \
+    pulseaudio \
+    pulseaudio-utils
+
+check_bin pulseaudio  pulseaudio
+check_bin pactl       pulseaudio-utils
+check_bin parec       pulseaudio-utils
+log "PulseAudio: $(pulseaudio --version 2>&1 | head -1)"
 
 # ─────────────────────────────────────────────────────────────────────────────
 # 7. XFCE desktop
@@ -835,19 +858,47 @@ DESKTOP_HOME="$(getent passwd "$DESKTOP_USER" | cut -d: -f6)"
 # writes, so they must exist and be owned by the runtime user.
 mkdir -p "$DESKTOP_HOME/Desktop" "$DESKTOP_HOME/Downloads" "$DESKTOP_HOME/.vnc"
 
+# ── Default terminal working directory ─────────────────────────────────────
+#
+# A terminal must open in the user's home. Two things decide that directory
+# and neither defaults to the home: the web client's app dock spawns from the
+# server process, whose cwd is the image's WORKDIR (/app), and a session under
+# a persistent root starts after pivot-root cd's to /. Bake xfce4-terminal's
+# "default working directory" preference into the system-wide xfconf channel,
+# exactly as the theme above is baked into /etc/xdg: xfconfd treats that file
+# as the desktop user's default, so no per-user copy has to be created or kept
+# in sync, and the terminal uses it whenever it is not given a directory of its
+# own. A per-user override still wins, so the preference stays editable.
+XCONF_TERMINAL_DIR=/etc/xdg/xfce4/xfconf/xfce-perchannel-xml
+mkdir -p "$XCONF_TERMINAL_DIR"
+cat > "${XCONF_TERMINAL_DIR}/xfce4-terminal.xml" <<TERMINAL
+<?xml version="1.0" encoding="UTF-8"?>
+<channel name="xfce4-terminal" version="1.0">
+  <property name="use-default-working-dir" type="bool" value="true"/>
+  <property name="default-working-directory" type="string" value="${DESKTOP_HOME}"/>
+</channel>
+TERMINAL
+log "Default terminal working directory: $DESKTOP_HOME"
+
 # Desktop shortcuts. They reuse the .desktop files the applications menu uses,
 # so synaptic's goes through synaptic-root and needs no polkit either. The
 # 0755 mode is the executable half of XFCE 4.18's launcher-trust check; the
 # other half (a GVfs checksum attribute) is seeded at session start by
 # /usr/local/bin/trust-desktop-launchers, see section 11.
 #
+# Terminal and Synaptic are the two shortcuts every build gets -- xfce4-terminal
+# is part of the base XFCE install (section 7) and synaptic is installed
+# unconditionally, while Chrome and VS Code appear only when their INSTALL_*
+# package is present (section 9).
+#
 # VS Code's deb ships its launcher as com.microsoft.VSCode.desktop; accept the
 # older code.desktop name too so a pinned repo cannot silently lose the
 # shortcut.
 VSCODE_DESKTOP="/usr/share/applications/com.microsoft.VSCode.desktop"
 [ -f "$VSCODE_DESKTOP" ] || VSCODE_DESKTOP="/usr/share/applications/code.desktop"
-log "Adding desktop shortcuts (Chrome, VS Code, Synaptic)"
+log "Adding desktop shortcuts (Terminal, Chrome, VS Code, Synaptic)"
 for shortcut_src in \
+    /usr/share/applications/xfce4-terminal.desktop \
     /usr/share/applications/google-chrome.desktop \
     "$VSCODE_DESKTOP" \
     /usr/local/share/applications/synaptic.desktop; do
@@ -885,6 +936,93 @@ for f in "$HOME"/Desktop/*.desktop; do
 done
 TRUST
 chmod +x /usr/local/bin/trust-desktop-launchers
+
+# ── Personal startup script ────────────────────────────────────────────────
+#
+# $HOME/.startup.sh is the "run this when my desktop starts" hook: xdg-open a
+# page, start a program, export per-session settings. A container desktop has no
+# login shell and no $HOME that outlives an image upgrade, so there is no
+# .profile or ~/.config/autostart to hang that on; xfce-vnc-session runs this
+# file instead (see section 11).
+#
+# It is seeded in two places. /etc/skel holds the single copy of the text: a
+# useradd -m after this point would copy it into that user's home, and
+# xfce-vnc-session copies it into $HOME whenever the file is missing -- the
+# normal Kubernetes case, where the manifests mount an emptyDir over $HOME and
+# hide whatever the image put there. The stock `ubuntu` user already existed when
+# this ran, so skel never applied to it and it is seeded explicitly below.
+mkdir -p /etc/skel
+cat > /etc/skel/.startup.sh <<'STARTUP'
+#!/bin/bash
+# ~/.startup.sh -- run once, automatically, when this desktop session starts.
+#
+# xfce-vnc-session runs this file in a terminal window on the desktop, as your
+# user, with DISPLAY and the session's D-Bus already set up and at about the same
+# time XFCE itself starts. The window stays at a shell prompt when the script
+# ends, so its output can be read and the terminal is still usable. It is where
+# "open these pages / start these programs when my desktop comes up" belongs:
+#
+#   xdg-open https://example.com        # a page in the default browser
+#   xdg-open ~/Documents/report.pdf     # a file in whichever app claims it
+#   firefox &                           # a program, left running in the background
+#
+# Nothing below those examples does anything yet, and a file with no commands in
+# it opens no window: this copy was seeded so the hook can be found, not because
+# there is something to run. Add a real command (a bare ":" counts) and the next
+# start opens the window on it -- no rebuild and no image change needed. Deleting
+# the file disables the hook until the next start, when the session recreates it.
+#
+# The window is opened in the background, so the script can never delay the
+# desktop or take it down when it fails. It is an ordinary terminal though: a
+# program left in the foreground holds up the prompt below it, and a background
+# one dies with the window unless it is detached (setsid firefox &).
+STARTUP
+chmod 0755 /etc/skel/.startup.sh
+
+# Never overwrite an edited script: install.sh is re-run over the desktop image
+# by Dockerfile.full, and the user's file is theirs.
+if [ ! -e "$DESKTOP_HOME/.startup.sh" ]; then
+    install -m 0755 /etc/skel/.startup.sh "$DESKTOP_HOME/.startup.sh"
+fi
+
+# What xfce-vnc-session actually launches, inside a terminal window. A separate
+# file because xfce4-terminal's -x wants a command to exec, not a shell pipeline,
+# and because this is also the fallback when an image has no terminal emulator.
+cat > /usr/local/bin/run-startup-script <<'RUNSTARTUP'
+#!/bin/bash
+# Run the user's startup script in the foreground, for the terminal window
+# xfce-vnc-session opens on it. Written by install.sh; see ~/.startup.sh.
+set -u
+
+SCRIPT="$HOME/.startup.sh"
+if [ ! -f "$SCRIPT" ]; then
+    echo "No startup script at $SCRIPT"
+    exit 0
+fi
+
+echo "Running $SCRIPT"
+echo
+
+# Its own shebang when it is executable, bash otherwise, so saving the file
+# without the executable bit still works.
+if [ -x "$SCRIPT" ]; then
+    "$SCRIPT"
+else
+    bash "$SCRIPT"
+fi
+STATUS=$?
+
+echo
+echo "[startup script exited with status $STATUS]"
+
+# Stay at a prompt so the output above can be read and the window is usable.
+# Only when there is a terminal: this same script is the fallback path when
+# xfce4-terminal is missing, and there it must not sit waiting for input.
+if [ -t 0 ]; then
+    exec bash -i
+fi
+RUNSTARTUP
+chmod +x /usr/local/bin/run-startup-script
 
 chown -R "${DESKTOP_UID}:${DESKTOP_GID}" "$DESKTOP_HOME"
 
@@ -961,6 +1099,49 @@ export XDG_CONFIG_DIRS=/etc/xdg
 export XDG_DATA_DIRS=/usr/local/share:/usr/share
 export XDG_CURRENT_DESKTOP=XFCE
 
+# ── Desktop audio ───────────────────────────────────────────────────────────
+# A container has no sound card, so PulseAudio would expose no output at all
+# and the web client would have nothing to capture. Start it, give it a named
+# virtual sink and make that sink the default: everything the desktop plays
+# then lands on the sink's monitor, which is the source the web client
+# captures over /audio (see server/audio.js). Without this block that endpoint
+# has no source and reports audio as unavailable.
+#
+# --exit-idle-time=-1 and --disallow-exit keep the daemon alive for the whole
+# session: the stock default.pa unloads an idle daemon after a few seconds,
+# which would silently stop audio as soon as nothing had played for a while.
+if command -v pulseaudio >/dev/null 2>&1; then
+    if ! pulseaudio --check 2>/dev/null; then
+        echo "Starting PulseAudio"
+        pulseaudio --start --exit-idle-time=-1 --disallow-exit \
+            >/tmp/pulseaudio.log 2>&1 \
+            || echo "warning: PulseAudio failed to start; desktop audio will be unavailable" >&2
+    fi
+
+    # Only talk to the daemon once its socket exists.
+    for _ in $(seq 1 20); do
+        pulseaudio --check 2>/dev/null && break
+        sleep 0.25
+    done
+
+    if command -v pactl >/dev/null 2>&1 && pactl info >/dev/null 2>&1; then
+        # A named sink rather than whatever module-always-sink invented: the
+        # name is stable across image upgrades, and its monitor lives exactly
+        # as long as the sink does. Load it only when it is missing -- loading
+        # it twice would create a second sink and a second monitor.
+        if ! pactl list short sinks 2>/dev/null | grep -q '[[:space:]]clouddesktop[[:space:]]'; then
+            pactl load-module module-null-sink sink_name=clouddesktop \
+                sink_properties=device.description=CloudDesktop \
+                >/dev/null 2>&1 \
+                || echo "warning: could not create the virtual audio sink" >&2
+        fi
+        pactl set-default-sink clouddesktop >/dev/null 2>&1 \
+            || echo "warning: could not make the virtual audio sink the default" >&2
+    else
+        echo "warning: PulseAudio is not answering on $XDG_RUNTIME_DIR; desktop audio will be unavailable" >&2
+    fi
+fi
+
 # XFCE 4.18 only trusts a desktop launcher when GVfs metadata carries the
 # checksum of the .desktop file's contents; seed it for everything currently
 # on ~/Desktop (see trust-desktop-launchers for why this cannot happen at
@@ -988,6 +1169,53 @@ autocutsel -fork -selection CLIPBOARD >/dev/null 2>&1 &
 # step failed silently once already; /tmp is per-pod, so the log never grows
 # across restarts.
 xcape -e 'Super_L=Alt_L|F1;Super_R=Alt_L|F1' >/tmp/xcape.log 2>&1 &
+
+# Start the session in the user's home. Every application the session spawns
+# inherits this as its working directory, so a terminal (or the file manager)
+# opened from the panel, the menu or a desktop shortcut lands in $HOME rather
+# than on / or the image's WORKDIR. The web client's app dock does not run
+# under this session, and is covered by the xfce4-terminal preference seeded
+# in section 10 plus the launcher's own cwd (see server/apps.js).
+cd "$HOME"
+
+# The user's own startup script: $HOME/.startup.sh, seeded and documented by
+# install.sh. It is the only "log in and run this" hook the desktop has, since a
+# container has neither a login shell nor a ~/.config/autostart that survives an
+# image upgrade. Recreate it from /etc/skel when it is missing, because the
+# Kubernetes manifests mount an emptyDir over $HOME and would otherwise leave the
+# hook invisible; best-effort, since a read-only $HOME must not stop the session.
+STARTUP_SCRIPT="$HOME/.startup.sh"
+if [ ! -e "$STARTUP_SCRIPT" ] && [ -w "$HOME" ]; then
+    cp /etc/skel/.startup.sh "$STARTUP_SCRIPT" 2>/dev/null || true
+fi
+
+# Run it, when there is something to run, in a terminal window on the desktop.
+#
+# Visible on purpose: a startup script's output is exactly what you want to see,
+# and a script that fails is otherwise invisible in a container desktop.
+#
+# A comment-only or empty file is skipped -- the seeded copy is exactly that, and
+# a blank window on every start would be noise. grep -v keeps the lines that are
+# neither blank nor a comment, so any real command (a bare ":" counts) opens it.
+#
+# The terminal is launched in the background, so whatever the script does can
+# never delay the desktop or take it down; run-startup-script keeps the window at
+# a prompt once the script has finished.
+if [ -f "$STARTUP_SCRIPT" ] \
+   && grep -qvE '^[[:space:]]*(#|$)' "$STARTUP_SCRIPT" 2>/dev/null; then
+    echo "Running $STARTUP_SCRIPT in a terminal window"
+    if command -v xfce4-terminal >/dev/null 2>&1; then
+        # --disable-server: this has to be a new window started by this session,
+        # never a command forwarded to an xfce4-terminal that is already up.
+        xfce4-terminal --disable-server --title="Startup script" \
+            -x /usr/local/bin/run-startup-script &
+    else
+        # No terminal emulator in the image: still run it, with the output in a
+        # log instead. stdin is /dev/null so the keep-the-window-open path above
+        # is skipped and this cannot wait on a tty that is not there.
+        /usr/local/bin/run-startup-script </dev/null >/tmp/startup.log 2>&1 &
+    fi
+fi
 
 # Become the desktop.
 #
@@ -1182,6 +1410,8 @@ cat <<SUMMARY
     display   ${VNC_DISPLAY}  ${VNC_GEOMETRY} depth ${VNC_DEPTH}
     RFB       :${VNC_PORT}  (loopback only)
     websocket :${VNC_WS_PORT}  (bound to 0.0.0.0)
+    audio     PulseAudio, virtual sink 'clouddesktop' -> captured on /audio
+              by the web client (AUDIO_ENABLED=off disables it)
 
   Installed runtimes:
 $(if [ "${INSTALL_NODE:-1}" = "1" ]; then echo "    node       $(node --version), npm $(npm --version)"; fi)

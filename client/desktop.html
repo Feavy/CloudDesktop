@@ -12,7 +12,7 @@
   <link rel="manifest" href="/manifest.json?cv=%CACHE_VERSION%">
   <link rel="apple-touch-icon" href="/icon-192.png?cv=%CACHE_VERSION%">
   <link rel="icon" type="image/png" sizes="192x192" href="/icon-192.png?cv=%CACHE_VERSION%">
-  <title>CloudDesktop</title>
+  <title>%PAGE_TITLE%</title>
   <link rel="stylesheet" href="/css/desktop.css?cv=%CACHE_VERSION%">
   <link rel="stylesheet" href="/css/appdock.css?cv=%CACHE_VERSION%">
   <link rel="stylesheet" href="/css/notifications.css?cv=%CACHE_VERSION%">
@@ -208,7 +208,8 @@
   <!-- ═══════════════════════════════════════ App dock ═══════════════════════════════════════
        Bottom-edge application launcher, rendered by the browser — the
        replacement for the Plank dock the desktop images used to ship.
-       Pinned and running applications are rendered by appdock.js. -->
+       Pinned and running applications, the Apps grid button and the bulk
+       Minimize All / Close All window actions are rendered by appdock.js. -->
   <div id="app-dock-trigger" class="app-dock-trigger"></div>
   <div id="app-dock" class="app-dock" role="toolbar" aria-label="Applications"></div>
 
@@ -269,6 +270,14 @@
       <div class="setting-row">
         <span class="setting-label">Theme</span>
         <button id="settings-theme" class="toggle-btn">Dark</button>
+      </div>
+      <!-- Hidden until GET /api/desktop/config says the server serves audio:
+           the client-only image has no desktop beside it to capture, and a
+           dead toggle would only be noise. The hint carries the transient
+           states (a browser needs a click before it will play anything). -->
+      <div class="setting-row" id="settings-audio-row" hidden>
+        <span class="setting-label">Sound<span id="settings-audio-hint" class="setting-hint"></span></span>
+        <button id="settings-audio" class="toggle-btn">On</button>
       </div>
       <div class="setting-row">
         <span class="setting-label">Dock Auto-hide</span>

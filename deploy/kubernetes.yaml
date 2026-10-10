@@ -80,6 +80,17 @@ spec:
             # --- X display used for xrandr / xclip / wmctrl ------------
             - name: DISPLAY
               value: ":1"
+            # --- Desktop audio -----------------------------------------
+            # Audio is captured from PulseAudio by this container itself, so
+            # it needs the desktop's audio socket (the all-in-one image, or a
+            # sidecar sharing XDG_RUNTIME_DIR). The Alpine clouddesktop-client
+            # image installs no parec and reports it unavailable by itself.
+            # - name: AUDIO_ENABLED
+            #   value: "auto"
+            # Optional: the browser tab / page title of the web client.
+            # Defaults to CloudDesktop.
+            # - name: PAGE_TITLE
+            #   value: "My Desktop"
             # The dock's "Restart Desktop" button needs no configuration here.
             # With the desktop in a container of its own (the setup this file
             # assumes) the browser ends the session over VNC by pressing the

@@ -18,13 +18,145 @@ const os = require('os');
 const path = require('path');
 const config = require('./config');
 
-// Same X environment the other route handlers run their helpers with.
-const X_ENV = {
-  ...process.env,
-  DISPLAY: config.DISPLAY,
-  XAUTHORITY: config.XAUTHORITY,
-  HOME: config.HOME_DIR,
+// ── The desktop session's environment ───────────────────────
+//
+// This process is not part of the XFCE session: start-desktop launches the
+// web client beside Xtigervnc, so it inherits none of the session's D-Bus
+// or XDG variables. Spawning an application without
+// DBUS_SESSION_BUS_ADDRESS is what breaks settings dialogs. libdbus cannot
+// find the session bus (xfce-vnc-session's `dbus-launch --sh-syntax` leaves
+// no X11 autolaunch property behind), so it starts a *second* bus; the
+// dialog then talks to an xfconfd the running xfsettingsd never hears from.
+// The theme is written to disk but the desktop never picks it up.
+//
+// Recover the real values from the processes that do live in the session.
+// They are fixed for the life of the session, so the lookup is cached.
+const SESSION_ENV_KEYS = [
+  'DBUS_SESSION_BUS_ADDRESS',
+  'XDG_RUNTIME_DIR',
+  'XDG_CONFIG_DIRS',
+  'XDG_DATA_DIRS',
+  'XDG_CURRENT_DESKTOP',
+  'XDG_SESSION_TYPE',
+];
+
+// Session daemons, most authoritative first. None of these is ever launched
+// by the dock, so their D-Bus address is always the session's. (xfconfd is
+// deliberately last: a dock-launched client can start its own copy, whose
+// address points at the wrong bus.)
+const SESSION_PROCESSES = [
+  'xfsettingsd', 'xfce4-session', 'xfwm4', 'xfce4-panel', 'xfdesktop', 'xfconfd',
+];
+
+// What install.sh's xfce-vnc-session always exports. Used only to fill a
+// gap when the session cannot be read; the bus address cannot be guessed
+// and so is never defaulted.
+const SESSION_ENV_FALLBACK = {
+  XDG_RUNTIME_DIR: config.XDG_RUNTIME_DIR,
+  XDG_CONFIG_DIRS: '/etc/xdg',
+  XDG_DATA_DIRS: '/usr/local/share:/usr/share',
+  XDG_CURRENT_DESKTOP: 'XFCE',
+  XDG_SESSION_TYPE: 'x11',
 };
+
+const SESSION_ENV_TTL = 60 * 1000;       // a hit lasts as long as the session
+const SESSION_ENV_MISS_TTL = 5 * 1000;   // a miss may only mean "not up yet"
+let sessionEnvCache = null;
+let sessionEnvAt = 0;
+
+function procEnv(pid) {
+  try {
+    const env = {};
+    for (const kv of fs.readFileSync(`/proc/${pid}/environ`, 'utf8').split('\0')) {
+      const eq = kv.indexOf('=');
+      if (eq > 0) env[kv.slice(0, eq)] = kv.slice(eq + 1);
+    }
+    return env;
+  } catch {
+    return null; // another user's process, or it exited mid-scan
+  }
+}
+
+function sessionEnv(fresh = false) {
+  const ttl = sessionEnvCache && sessionEnvCache.DBUS_SESSION_BUS_ADDRESS
+    ? SESSION_ENV_TTL
+    : SESSION_ENV_MISS_TTL;
+  if (!fresh && sessionEnvCache && Date.now() - sessionEnvAt < ttl) {
+    return sessionEnvCache;
+  }
+
+  const pidsByComm = new Map();
+  try {
+    for (const entry of fs.readdirSync('/proc')) {
+      if (!/^\d+$/.test(entry)) continue;
+      let comm;
+      try { comm = fs.readFileSync(`/proc/${entry}/comm`, 'utf8').trim(); } catch { continue; }
+      if (SESSION_PROCESSES.includes(comm) && !pidsByComm.has(comm)) {
+        pidsByComm.set(comm, entry);
+      }
+    }
+  } catch { /* no /proc to inspect — leave the environment alone */ }
+
+  const found = {};
+  for (const comm of SESSION_PROCESSES) {
+    const env = pidsByComm.has(comm) ? procEnv(pidsByComm.get(comm)) : null;
+    if (!env) continue;
+    for (const key of SESSION_ENV_KEYS) {
+      if (env[key] && !found[key]) found[key] = env[key];
+    }
+    if (found.DBUS_SESSION_BUS_ADDRESS) break;
+  }
+
+  // Cache misses too (briefly): without a bus address the session is not up
+  // yet, or lives in another pod — either way the next launch should look
+  // again, but a scan loop must not re-read /proc for every entry.
+  sessionEnvCache = found;
+  sessionEnvAt = Date.now();
+  return found;
+}
+
+// Environment for an application launched on the session display: this
+// process's environment, the desktop session's values layered on top, and
+// the display credentials config resolves.
+function launchEnv() {
+  const env = {
+    ...process.env,
+    ...sessionEnv(),
+    DISPLAY: config.DISPLAY,
+    XAUTHORITY: config.XAUTHORITY,
+    HOME: config.HOME_DIR,
+  };
+  for (const [key, value] of Object.entries(SESSION_ENV_FALLBACK)) {
+    if (!env[key]) env[key] = value;
+  }
+  return env;
+}
+
+// The desktops this session claims (XDG_CURRENT_DESKTOP is a
+// colon-separated list). install.sh's session always sets XFCE.
+function currentDesktops() {
+  return String(sessionEnv().XDG_CURRENT_DESKTOP || 'XFCE')
+    .split(':')
+    .map((s) => s.trim().toLowerCase())
+    .filter(Boolean);
+}
+
+function desktopNames(value) {
+  return String(value || '')
+    .split(';')
+    .map((s) => s.trim().toLowerCase())
+    .filter(Boolean);
+}
+
+// OnlyShowIn/NotShowIn, the Desktop Entry spec's menu hints. The dock is
+// the launcher *of this session*, so an entry that belongs to another
+// desktop is not offered: the Unity control centre's Appearance panel, for
+// one, has no effect on an XFCE theme and only hides the real one.
+function shownOnCurrentDesktop(entry, current = currentDesktops()) {
+  if (desktopNames(entry.notshowin).some((d) => current.includes(d))) return false;
+  const only = desktopNames(entry.onlyshowin);
+  return only.length === 0 || only.some((d) => current.includes(d));
+}
 
 // Re-scan at most this often; the package set of an image is static but
 // apps the user installs at runtime (~/.local, flatpak) should appear
@@ -76,17 +208,31 @@ function pixmapDirs() {
   return [...new Set(dirs)];
 }
 
-// The icon theme the desktop itself uses (install.sh writes it into the
+// The icon theme the desktop itself uses (install.sh writes one into the
 // xfconf xsettings channel). Matching it keeps the dock's icons consistent
 // with the desktop's own menus; hicolor is the universal fallback.
+//
+// xfconf keeps a channel's *live* values in the running user's config
+// directory and falls back to the system defaults under XDG_CONFIG_DIRS, so
+// read both in that order — a theme the user picked in Appearance has to win
+// over the image's default, or "currently in use" would be a lie.
 function desktopIconTheme() {
-  try {
-    const file = '/etc/xdg/xfce4/xfconf/xfce-perchannel-xml/xsettings.xml';
-    const xml = fs.readFileSync(file, 'utf8');
-    // <property name="IconThemeName" type="string" value="Tela"/>
-    const m = xml.match(/name="IconThemeName"[^>]*value="([^"]+)"/);
-    if (m && m[1] && /^[\w.-]+$/.test(m[1])) return m[1];
-  } catch { /* no xfconf default — fall through */ }
+  const rel = path.join('xfce4', 'xfconf', 'xfce-perchannel-xml', 'xsettings.xml');
+  const configHome = process.env.XDG_CONFIG_HOME || path.join(config.HOME_DIR, '.config');
+  const configDirs = (process.env.XDG_CONFIG_DIRS || '/etc/xdg').split(':');
+  const files = [
+    path.join(configHome, rel),
+    ...configDirs.filter(Boolean).map((dir) => path.join(dir, rel)),
+  ];
+
+  for (const file of files) {
+    try {
+      const xml = fs.readFileSync(file, 'utf8');
+      // <property name="IconThemeName" type="string" value="Tela"/>
+      const m = xml.match(/name="IconThemeName"[^>]*value="([^"]+)"/);
+      if (m && m[1] && /^[\w.-]+$/.test(m[1])) return m[1];
+    } catch { /* not in this root — try the next one */ }
+  }
   return '';
 }
 
@@ -175,6 +321,25 @@ function whichSync(cmd) {
 
 // ── Registry ────────────────────────────────────────────────
 
+// A window can report a string that several entries share. Thunar's window
+// and its "Bulk Rename" dialog both run `thunar`, so both .desktop files have
+// the same Exec basename, and picking whichever was scanned first labelled
+// the file manager "Bulk Rename". Keep the family's *main* entry instead:
+// the exact `<name>.desktop` file first, then whichever declares a
+// StartupWMClass (a primary GUI entry), then the shortest id (so
+// code.desktop beats code-url-handler.desktop).
+function moreCanonical(a, b, key) {
+  const score = (app) => {
+    if (app.id.toLowerCase() === `${key}.desktop`) return 2;
+    return app.startupWMClass ? 1 : 0;
+  };
+  const sa = score(a);
+  const sb = score(b);
+  if (sa !== sb) return sa > sb;
+  if (a.id.length !== b.id.length) return a.id.length < b.id.length;
+  return a.id.localeCompare(b.id) < 0;
+}
+
 let cache = null;   // { list, byId, byStartupWMClass, byExecName }
 let cacheAt = 0;
 let iconTheme = null; // resolved once
@@ -183,6 +348,7 @@ function scanApps(force = false) {
   if (!force && cache && Date.now() - cacheAt < SCAN_TTL) return cache;
 
   const byId = new Map();
+  const desktops = currentDesktops();
   for (const dir of appDirs()) {
     let names;
     try { names = fs.readdirSync(dir); } catch { continue; }
@@ -194,6 +360,7 @@ function scanApps(force = false) {
 
       if (e.type && e.type.toLowerCase() !== 'application') continue;
       if (truthy(e.nodisplay) || truthy(e.hidden)) continue;
+      if (!shownOnCurrentDesktop(e, desktops)) continue;
       if (!e.exec) continue;
       if (e.tryexec && !whichSync(e.tryexec.trim())) continue;
 
@@ -221,11 +388,21 @@ function scanApps(force = false) {
   const byExecName = new Map();
   for (const app of list) {
     const wm = app.startupWMClass.toLowerCase();
-    if (wm && !byStartupWMClass.has(wm)) byStartupWMClass.set(wm, app.id);
-    if (app.execName && !byExecName.has(app.execName)) byExecName.set(app.execName, app.id);
+    if (wm) {
+      const cur = byStartupWMClass.get(wm);
+      if (!cur || moreCanonical(app, byId.get(cur), wm)) byStartupWMClass.set(wm, app.id);
+    }
+    if (app.execName) {
+      const cur = byExecName.get(app.execName);
+      if (!cur || moreCanonical(app, byId.get(cur), app.execName)) byExecName.set(app.execName, app.id);
+    }
   }
 
+  // Both caches depend on the theme as well as on the file tree, and a
+  // rescan is where a theme the user just picked up in Appearance is
+  // noticed: drop the resolved theme name with the resolved icon paths.
   iconCache.clear();
+  iconTheme = null;
   cache = { list, byId, byStartupWMClass, byExecName };
   cacheAt = Date.now();
   return cache;
@@ -245,11 +422,19 @@ function getApp(id) {
 // id+size → absolute file path, so a resolved icon survives repeated polls.
 const iconCache = new Map();
 
-// Every candidate file for an icon name, as {file, size}. `size` is the
-// rendered width the theme directory advertises (scalable → large).
+// Every candidate file for an icon name, as {file, size, baseRank,
+// themeRank}. `size` is the rendered width the theme directory advertises
+// (scalable → large); the ranks record which search root and which theme
+// the file came from, so pickIcon can honour the same precedence the
+// desktop's own icon lookup uses.
 function iconCandidates(name) {
   const out = [];
-  const push = (file, size) => { try { fs.accessSync(file, fs.constants.R_OK); out.push({ file, size }); } catch { /* missing */ } };
+  const push = (file, size, baseRank, themeRank) => {
+    try {
+      fs.accessSync(file, fs.constants.R_OK);
+      out.push({ file, size, baseRank, themeRank });
+    } catch { /* missing */ }
+  };
 
   if (iconTheme === null) iconTheme = desktopIconTheme();
   // The desktop's own theme first, then hicolor (which every theme
@@ -262,23 +447,25 @@ function iconCandidates(name) {
     ...iconBaseDirs().flatMap((base) => safeReaddir(base)),
   ])].filter(Boolean);
 
-  for (const base of iconBaseDirs()) {
-    for (const theme of themes) {
+  const bases = iconBaseDirs();
+  bases.forEach((base, baseRank) => {
+    themes.forEach((theme, themeRank) => {
       const themeDir = path.join(base, theme);
       for (const sizeDir of safeReaddir(themeDir)) {
         const size = parseSizeDir(sizeDir);
         if (size === null) continue;
         for (const ext of ['svg', 'png', 'xpm']) {
-          push(path.join(themeDir, sizeDir, 'apps', `${name}.${ext}`), size);
+          push(path.join(themeDir, sizeDir, 'apps', `${name}.${ext}`), size, baseRank, themeRank);
         }
       }
-    }
-  }
+    });
+  });
 
-  // Legacy pixmaps directory: flat files, no size information.
+  // Legacy pixmaps directory: flat files, no size information, and a last
+  // resort behind every theme.
   for (const pixdir of pixmapDirs()) {
     for (const ext of ['png', 'svg', 'xpm']) {
-      push(path.join(pixdir, `${name}.${ext}`), 48);
+      push(path.join(pixdir, `${name}.${ext}`), 48, bases.length, themes.length);
     }
   }
 
@@ -289,24 +476,32 @@ function safeReaddir(dir) {
   try { return fs.readdirSync(dir); } catch { return []; }
 }
 
+// A theme's size directory: "scalable", "48x48", or — as Tela and several
+// other modern themes install it — a bare "48". Anything else (`symbolic`
+// above all: those are monochrome glyphs, not application icons) is not a
+// size.
 function parseSizeDir(name) {
   if (name === 'scalable') return 512;
-  const m = name.match(/^(\d+)x\d+$/);
+  const m = name.match(/^(\d+)(?:x\d+)?$/);
   return m ? parseInt(m[1], 10) : null;
 }
 
 const EXT_ORDER = { '.svg': 0, '.png': 1, '.xpm': 2 };
 
-// Closest size at or above the request wins; below that, the largest
-// available. SVG beats raster at equal score because it renders crisp at
-// any size the client asks for.
+// The search roots and the theme list are precedence-ordered, so the first
+// theme that carries the icon at all wins: the desktop's own theme beats
+// hicolor even when hicolor has the nearer size. Size fit only orders
+// candidates *within* one theme, where the closest size at or above the
+// request wins and SVG beats raster at equal score because it renders crisp
+// at any size the client asks for.
 function pickIcon(candidates, requested) {
   if (!candidates.length) return null;
-  const score = (c) => {
+  const fit = (c) => {
     const size = c.size >= 512 ? requested + 0.5 : Math.abs(c.size - requested);
     return size + ((EXT_ORDER[path.extname(c.file).toLowerCase()] ?? 9) / 100);
   };
-  candidates.sort((a, b) => score(a) - score(b));
+  candidates.sort((a, b) =>
+    (a.baseRank - b.baseRank) || (a.themeRank - b.themeRank) || (fit(a) - fit(b)));
   return candidates[0].file;
 }
 
@@ -342,8 +537,12 @@ function launchApp(id) {
     };
 
     const run = (cmd, args) => {
-      const opts = { env: X_ENV, detached: true, stdio: 'ignore' };
+      const opts = { env: launchEnv(), detached: true, stdio: 'ignore' };
+      // The .desktop file's own Path= wins; otherwise start in the desktop
+      // user's home, so an app that takes its directory implicitly -- the
+      // terminal above all -- does not inherit the server's cwd.
       if (app.wdPath && fs.existsSync(app.wdPath)) opts.cwd = app.wdPath;
+      else if (config.LAUNCH_CWD) opts.cwd = config.LAUNCH_CWD;
       const child = spawn(cmd, args, opts);
       child.on('error', done);
       child.unref();
@@ -483,5 +682,7 @@ module.exports = {
   defaultPins,
   // exported for tests
   parseDesktopEntry,
+  parseSizeDir,
+  sessionEnv,
   splitExec,
 };

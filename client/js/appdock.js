@@ -25,6 +25,13 @@ const MINIMIZE_ICON_SVG = '<svg viewBox="0 0 16 16" fill="none" stroke="currentC
 
 const CLOSE_ICON_SVG = '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"><line x1="4.5" y1="4.5" x2="11.5" y2="11.5"/><line x1="11.5" y1="4.5" x2="4.5" y2="11.5"/></svg>';
 
+// Bulk window actions that sit beside the Apps button: a window collapsing
+// downwards (minimize all) and a window being dismissed (close all). Both
+// reuse the grid button's 22px canvas so the trailing group stays uniform.
+const MINIMIZE_ALL_ICON_SVG = '<svg width="22" height="22" viewBox="0 0 22 22" fill="currentColor" xmlns="http://www.w3.org/2000/svg"><path d="M18.3333 1.83301H7.33325C6.32492 1.83301 5.49992 2.65801 5.49992 3.66634V14.6663C5.49992 15.6838 6.32492 16.4997 7.33325 16.4997H18.3333C19.3508 16.4997 20.1666 15.6838 20.1666 14.6663V3.66634C20.1666 2.65801 19.3508 1.83301 18.3333 1.83301ZM18.3333 14.6663H7.33325V3.66634H18.3333V14.6663ZM3.66659 5.49967V18.333H16.4999V20.1663H3.66659C2.65825 20.1663 1.83325 19.3505 1.83325 18.333V5.49967H3.66659Z"/><rect x="9.16675" y="11" width="7.33333" height="1.83333"/></svg>';
+
+const CLOSE_ALL_ICON_SVG = '<svg width="22" height="22" viewBox="0 0 22 22" fill="currentColor" xmlns="http://www.w3.org/2000/svg"><path d="M18.3333 1.83301H7.33325C6.32492 1.83301 5.49992 2.65801 5.49992 3.66634V14.6663C5.49992 15.6838 6.32492 16.4997 7.33325 16.4997H18.3333C19.3508 16.4997 20.1666 15.6838 20.1666 14.6663V3.66634C20.1666 2.65801 19.3508 1.83301 18.3333 1.83301ZM18.3333 14.6663H7.33325V3.66634H18.3333V14.6663ZM3.66659 5.49967V18.333H16.4999V20.1663H3.66659C2.65825 20.1663 1.83325 19.3505 1.83325 18.333V5.49967H3.66659ZM8.95575 11.7697L11.5499 9.16634L8.95575 6.55384L10.2391 5.27051L12.8333 7.88301L15.4366 5.28884L16.7199 6.57217L14.1166 9.16634L16.7108 11.7697L15.4274 13.053L12.8333 10.4497L10.2391 13.053L8.95575 11.7697Z"/></svg>';
+
 // ── Elements ────────────────────────────────────────────────
 
 const appDock        = document.getElementById('app-dock');
@@ -236,6 +243,31 @@ async function closeWindow(winId) {
   schedulePoll(600);
 }
 
+// ── Bulk window actions (dock buttons) ──────────────────────
+
+// The dock's global buttons act on every open window, not just the ones the
+// app registry managed to map: that is the same list the window switcher
+// shows, and the only sensible reading of "all running windows".
+async function minimizeAllWindows() {
+  if (!windows.length) return;
+  await Promise.all(windows.map((w) =>
+    jsonFetch('/api/desktop/windows/minimize', 'POST', { id: w.id }).catch(() => {})));
+  schedulePoll(600);
+}
+
+// Closing every window is destructive and irreversible, so it asks first —
+// the same native confirm the session restart uses. The count is in the
+// prompt so the dialog says exactly what is about to happen.
+async function closeAllWindows() {
+  const count = windows.length;
+  if (!count) return;
+  const noun = count === 1 ? 'window' : 'windows';
+  if (!confirm(`Close all ${count} running ${noun}? Unsaved work will be lost.`)) return;
+  await Promise.all(windows.map((w) =>
+    jsonFetch('/api/desktop/windows/close', 'POST', { id: w.id }).catch(() => {})));
+  schedulePoll(600);
+}
+
 function togglePin(id) {
   const i = pins.indexOf(id);
   if (i >= 0) pins.splice(i, 1);
@@ -272,6 +304,21 @@ function gridButton() {
   return btn;
 }
 
+// A trailing dock button that acts on the whole desktop. It always stays in
+// place — so the dock layout never jumps — but reads as unavailable while
+// there is nothing to act on.
+function dockActionButton(id, label, svg, disabled) {
+  const btn = document.createElement('button');
+  btn.type = 'button';
+  btn.id = id;
+  btn.className = 'dock-item app-dock-item app-dock-action';
+  btn.dataset.label = label;
+  btn.setAttribute('aria-label', label);
+  btn.innerHTML = svg;
+  if (disabled) btn.disabled = true;
+  return btn;
+}
+
 function renderDock() {
   const byApp = windowsByApp();
   const pinnedShown = pins.filter((id) => appsById.has(id));
@@ -291,6 +338,13 @@ function renderDock() {
     frag.appendChild(sep);
   }
   frag.appendChild(gridButton());
+  // Bulk window actions ride beside the Apps button; they are dimmed until
+  // the first window poll finds something to act on.
+  const noWindows = windows.length === 0;
+  frag.appendChild(dockActionButton('btn-minimize-all', 'Minimize All Windows',
+    MINIMIZE_ALL_ICON_SVG, noWindows));
+  frag.appendChild(dockActionButton('btn-close-all', 'Close All Windows',
+    CLOSE_ALL_ICON_SVG, noWindows));
   appDock.replaceChildren(frag);
 }
 
@@ -454,10 +508,10 @@ function openAppMenu(appId, x, y) {
     addWindowCtxItem(w, appId);
   }
   if (wins.length) addCtxSep();
-  addCtxItem('Open New Window', { onClick: () => launchApp(appId) });
+  addCtxItem('Open New', { onClick: () => launchApp(appId) });
   addCtxItem(pinned ? 'Unpin from Dock' : 'Pin to Dock', { onClick: () => togglePin(appId) });
-  if (wins.length) addCtxItem('Minimize All Windows', { onClick: () => minimizeAppWindows(appId) });
-  if (wins.length) addCtxItem('Close All Windows', { danger: true, onClick: () => closeAppWindows(appId) });
+  if (wins.length) addCtxItem('Minimize All', { onClick: () => minimizeAppWindows(appId) });
+  if (wins.length) addCtxItem('Close All', { danger: true, onClick: () => closeAppWindows(appId) });
 
   placeCtxMenu(x, y);
 }
@@ -613,6 +667,10 @@ export function initAppDock(options = {}) {
     if (!item || clickSuppressed()) return;
     if (item.id === 'btn-appview') {
       openAppsView();
+    } else if (item.id === 'btn-minimize-all') {
+      minimizeAllWindows();
+    } else if (item.id === 'btn-close-all') {
+      closeAllWindows();
     } else if (item.dataset.app) {
       activateApp(item.dataset.app);
     }

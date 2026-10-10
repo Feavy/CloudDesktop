@@ -555,6 +555,12 @@ body.mobile-fullscreen #vnc-container { inset: 0 !important; }
 }
 .setting-row:last-of-type { border-bottom: none; }
 .setting-label { font-size: 14px; font-weight: 500; color: var(--text); }
+/* Inline state next to a setting's name (currently only Sound): muted and
+   small so it reads as an aside, not as part of the label. */
+.setting-hint {
+  margin-left: 7px;
+  font-size: 12px; font-weight: 400; color: var(--text-muted);
+}
 .toggle-btn {
   min-width: 58px; padding: 6px 14px;
   border: 1px solid var(--border);
