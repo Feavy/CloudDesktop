@@ -567,6 +567,19 @@ body.mobile-fullscreen #vnc-container { inset: 0 !important; }
 }
 .toggle-btn:hover { border-color: var(--accent); background: var(--accent-hover) !important; }
 
+/* The file-level actions of the session state row. The row's own buttons are
+   smaller than a toggle, and wrap on a narrow modal rather than overflowing. */
+.settings-state-actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 6px;
+}
+.settings-state-actions .btn-ghost {
+  padding: 6px 10px;
+  font-size: 12px !important;
+}
+
 /* Build caption at the bottom of the settings modal */
 .settings-version {
   margin: 14px 0 0;

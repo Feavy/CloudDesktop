@@ -329,9 +329,14 @@ function iconFile(id, size = 48) {
 
 // ── Launching ───────────────────────────────────────────────
 
-function launchApp(id) {
+// Launch an installed application. `extraArgs` are appended to the .desktop
+// entry's own argv, which is how a session restore hands a browser the URLs it
+// had open. It is not a way to run arbitrary commands: the executable and its
+// base arguments still come from the .desktop file alone.
+function launchApp(id, extraArgs = []) {
   const app = getApp(id);
   if (!app) return Promise.reject(new Error(`Unknown application: ${id}`));
+  const extra = Array.isArray(extraArgs) ? extraArgs.filter((a) => typeof a === 'string') : [];
 
   return new Promise((resolve, reject) => {
     let settled = false;
@@ -360,21 +365,24 @@ function launchApp(id) {
     // applies the .desktop file's own rules: working directory, terminal
     // wrapping and field codes. The manual path below is the fallback for
     // images where it is absent.
-    if (whichSync('gtk-launch')) {
+    //
+    // It cannot carry extra arguments, so a caller that has some -- a restore
+    // passing a browser its URLs -- goes straight to the manual path.
+    if (!extra.length && whichSync('gtk-launch')) {
       run('gtk-launch', [id.replace(/\.desktop$/, '')]);
       return;
     }
 
     let cmd = app.argv[0];
     let args = app.argv.slice(1);
-    if (app.terminal) {
+    if (app.terminal && !extra.length) {
       const term = whichSync('xfce4-terminal');
       if (term) {
         args = ['-x', cmd, ...args];
         cmd = term;
       }
     }
-    run(cmd, args);
+    run(cmd, [...args, ...extra]);
   });
 }
 

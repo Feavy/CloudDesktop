@@ -743,6 +743,218 @@ document.getElementById('btn-restart').addEventListener('click', async () => {
   }
 });
 
+// ── Session state (save / restore) ──────────────────────────
+
+// Two dock buttons and the settings that go with them. The state itself is a
+// JSON file the server writes into the desktop user's home (next to the dock
+// pins), so it survives a pod restart when the deployment mounted a persistent
+// root there — and when it did not, the Download / Upload buttons here move the
+// same file in and out of the pod by hand.
+//
+// "Re-run commands" and "Auto-restore" are kept in localStorage rather than on
+// the server: they are preferences of this browser, not of the snapshot.
+
+const btnSaveState = document.getElementById('btn-save-state');
+const btnRestoreState = document.getElementById('btn-restore-state');
+const stateSummary = document.getElementById('settings-state-summary');
+const autoRestoreBtn = document.getElementById('settings-auto-restore');
+const rerunBtn = document.getElementById('settings-rerun');
+const stateFileInput = document.getElementById('settings-state-file');
+
+let rerunCommands = localStorage.getItem('state-rerun') === 'on';
+
+function plural(n, one, many) {
+  return `${n} ${n === 1 ? one : many}`;
+}
+
+// One line describing a saved session, shared by the settings caption and the
+// toasts so the two can never disagree.
+function describeState(status) {
+  if (!status || !status.exists) return 'No saved session';
+  const s = status.summary || {};
+  const parts = [plural(s.windows || 0, 'window', 'windows')];
+  if (s.terminals) parts.push(plural(s.terminals, 'terminal', 'terminals'));
+  if (s.tabs) parts.push(plural(s.tabs, 'tab', 'tabs'));
+  const when = status.savedAt
+    ? new Date(status.savedAt).toLocaleString(undefined, { dateStyle: 'medium', timeStyle: 'short' })
+    : 'earlier';
+  return `Saved ${when} · ${parts.join(', ')}`;
+}
+
+async function refreshStateStatus() {
+  let status = null;
+  try {
+    const r = await fetch('/api/desktop/state', { credentials: 'same-origin', cache: 'no-store' });
+    if (r.ok) status = await r.json();
+  } catch { /* the service may be down; the buttons report that themselves */ }
+  if (stateSummary) stateSummary.textContent = describeState(status);
+  if (autoRestoreBtn && status) autoRestoreBtn.textContent = status.autoRestore ? 'On' : 'Off';
+  return status;
+}
+
+async function saveSessionState() {
+  btnSaveState.disabled = true;
+  try {
+    const r = await fetch('/api/desktop/state/save', { method: 'POST', credentials: 'same-origin' });
+    const body = await r.json().catch(() => ({}));
+    if (!r.ok) {
+      notify(body.error || 'Could not save the session', 'error');
+      return;
+    }
+    const s = body.summary || {};
+    const extra = [];
+    if (s.terminals) extra.push(plural(s.terminals, 'terminal', 'terminals'));
+    if (s.tabs) extra.push(plural(s.tabs, 'tab', 'tabs'));
+    notify(`Session saved: ${plural(s.windows || 0, 'window', 'windows')}`
+      + (extra.length ? `, ${extra.join(', ')}` : ''), 'success');
+    if (Array.isArray(body.unlaunchable) && body.unlaunchable.length) {
+      // Those windows are in the file but no installed application claims
+      // them, so they will not come back; say so now rather than at restore.
+      notify(`${plural(body.unlaunchable.length, 'window', 'windows')} could not be matched to an `
+        + 'installed application and will not be restored', 'warning', 7000);
+    }
+    await refreshStateStatus();
+  } catch {
+    notify('Could not reach the desktop service to save the session', 'error');
+  } finally {
+    btnSaveState.disabled = false;
+  }
+}
+
+async function restoreSessionState({ auto = false } = {}) {
+  btnRestoreState.disabled = true;
+  try {
+    const r = await fetch('/api/desktop/state/restore', {
+      method: 'POST',
+      credentials: 'same-origin',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ auto, rerunCommands }),
+    });
+    const body = await r.json().catch(() => ({}));
+    if (!r.ok) {
+      // An automatic attempt that the server declines is not worth a toast on
+      // every page load; a click that fails always is.
+      if (!auto) notify(body.error || 'Could not restore the session', 'error');
+      return;
+    }
+    notify(`Restored ${plural(body.restored || 0, 'window', 'windows')}`
+      + (body.clipboard ? ' and the clipboard' : ''), 'success');
+    if (body.failed) {
+      notify(`${plural(body.failed, 'entry', 'entries')} could not be restored`
+        + (body.errors && body.errors.length ? `: ${body.errors[0]}` : ''), 'warning', 7000);
+    }
+    await refreshStateStatus();
+    refreshWindowList();
+  } catch {
+    if (!auto) notify('Could not reach the desktop service to restore the session', 'error');
+  } finally {
+    btnRestoreState.disabled = false;
+  }
+}
+
+// On load, replay the saved session if the user asked for that and the desktop
+// looks freshly started. The server refuses a second automatic restore of the
+// same snapshot, so a reload cannot launch everything twice.
+async function maybeAutoRestore() {
+  const status = await refreshStateStatus();
+  if (!status || !status.exists || !status.autoRestore) return;
+  try {
+    const r = await fetch('/api/desktop/windows', { credentials: 'same-origin', cache: 'no-store' });
+    const body = await r.json();
+    if (Array.isArray(body.windows) && body.windows.length) return; // something is open
+  } catch { return; }
+  await restoreSessionState({ auto: true });
+}
+
+// Wiring. Guarded rather than assumed: a browser holding a cached copy of the
+// page from before this feature existed should lose the buttons, not the rest
+// of the module's wiring (the dock is a single script).
+const on = (el, event, handler) => { if (el) el.addEventListener(event, handler); };
+
+on(btnSaveState, 'click', saveSessionState);
+on(btnRestoreState, 'click', () => restoreSessionState());
+
+on(autoRestoreBtn, 'click', async () => {
+  const next = autoRestoreBtn.textContent !== 'On';
+  const before = autoRestoreBtn.textContent;
+  autoRestoreBtn.textContent = next ? 'On' : 'Off';
+  try {
+    const r = await fetch('/api/desktop/state/settings', {
+      method: 'POST',
+      credentials: 'same-origin',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ autoRestore: next }),
+    });
+    if (!r.ok) throw new Error();
+  } catch {
+    autoRestoreBtn.textContent = before; // put the switch back where it was
+    notify('Could not save the auto-restore setting', 'error');
+  }
+});
+
+if (rerunBtn) rerunBtn.textContent = rerunCommands ? 'On' : 'Off';
+on(rerunBtn, 'click', () => {
+  rerunCommands = !rerunCommands;
+  localStorage.setItem('state-rerun', rerunCommands ? 'on' : 'off');
+  rerunBtn.textContent = rerunCommands ? 'On' : 'Off';
+});
+
+on(document.getElementById('settings-state-download'), 'click', () => {
+  // The endpoint answers with Content-Disposition, so a same-tab link starts a
+  // download instead of navigating away from the desktop.
+  const a = document.createElement('a');
+  a.href = '/api/desktop/state/download';
+  a.download = '';
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+});
+
+on(document.getElementById('settings-state-upload'), 'click', () => {
+  if (stateFileInput) stateFileInput.click();
+});
+
+on(stateFileInput, 'change', async () => {
+  const file = stateFileInput.files && stateFileInput.files[0];
+  stateFileInput.value = ''; // so picking the same file twice fires again
+  if (!file) return;
+
+  let parsed;
+  try {
+    parsed = JSON.parse(await file.text());
+  } catch {
+    notify('That file is not a session state (not JSON)', 'error');
+    return;
+  }
+
+  try {
+    const r = await fetch('/api/desktop/state', {
+      method: 'PUT',
+      credentials: 'same-origin',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(parsed),
+    });
+    const body = await r.json().catch(() => ({}));
+    if (!r.ok) {
+      notify(body.error || 'That file is not a session state', 'error');
+      return;
+    }
+    notify(`Session state loaded: ${describeState({ exists: true, savedAt: body.savedAt, summary: body.summary })}`, 'success');
+    await refreshStateStatus();
+  } catch {
+    notify('Could not upload the session state', 'error');
+  }
+});
+
+on(document.getElementById('settings-state-delete'), 'click', async () => {
+  if (!confirm('Delete the saved session?')) return;
+  try {
+    await fetch('/api/desktop/state', { method: 'DELETE', credentials: 'same-origin' });
+  } catch { /* nothing to report beyond the caption below */ }
+  notify('Saved session deleted', 'info');
+  await refreshStateStatus();
+});
+
 // ── Window switcher ─────────────────────────────────────────
 
 const windowList      = document.getElementById('window-list');
@@ -2436,6 +2648,9 @@ if (isTouch) {
 (async function init() {
   // Auto-fit resolution to viewport before connecting
   await serverConfigReady;
+  // Fire-and-forget: a restore has the server open windows and may take a few
+  // seconds to settle their geometry, which must not hold up the VNC connect.
+  maybeAutoRestore();
   await autoFitResolution();
   await new Promise(r => setTimeout(r, 500));
   connect();

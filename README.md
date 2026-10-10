@@ -346,6 +346,64 @@ desktop images. With `ROOT_PERSIST_DIR` unset it is a pass-through to `tini`,
 so nothing changes for the default deployment. `clouddesktop-client` has no
 desktop and is unaffected.
 
+### Saving and restoring a session
+
+A restart takes the running session with it: the applications, the terminals
+and the browser tabs are gone even when `ROOT_PERSIST_DIR` keeps `$HOME`. Two
+buttons in the left dock write that state to a file and put it back:
+
+- **Save Session** captures the desktop as it is now.
+- **Restore Session** reopens what the file describes.
+
+What is captured, and what is not:
+
+| Captured | How | Restored as |
+|---|---|---|
+| Open windows | `wmctrl`, minus panels and the desktop window | The application's own `.desktop` entry, moved back onto its workspace and geometry |
+| Terminals | The shell behind each terminal window, its working directory and the command running in it (from `/proc`) | `xfce4-terminal --working-directory=…`, optionally re-running the command |
+| Browser tabs | The browser's own session store (see below) | `--new-window` with the URLs, in the same profile |
+| Clipboard | `xclip` | Put back into the X clipboard |
+
+What it deliberately leaves behind, because the information dies with the
+process that owned it: terminal scrollback, unsaved document contents, and each
+tab's back/forward history. Re-running a shell command is **off** by default —
+a "restore" button should not decide on its own to re-execute whatever a shell
+had in the foreground — and is enabled by the *Re-run commands* switch in the
+settings modal. Only the first shell of a terminal window is captured, so extra
+tabs come back as a single shell in that window's directory.
+
+Browser tabs are read from the session files the browsers write for their own
+"restore previous session" prompt, since neither browser exposes a tab list to
+another process:
+
+- **Firefox** keeps `sessionstore-backups/recovery.jsonlz4` (JSON, lz4 in
+  Mozilla's wrapper) while it runs; the tab list is read straight out of it.
+- **Chrome and Chromium** write a binary command log to
+  `Sessions/{Session,Tabs}_<timestamp>`. It is replayed the way the browser
+  itself replays it: the records that create tabs and windows are followed,
+  closed tabs and windows are dropped, and each surviving tab's current URL is
+  taken from its selected navigation. This reads the format Chromium's
+  `components/sessions` defines, so a browser that changes it degrades to fewer
+  captured tabs rather than to a broken one.
+
+The file is one small JSON document at
+`$HOME/.config/clouddesktop/session-state.json`, next to the dock pins, and it
+survives a pod restart for exactly as long as `$HOME` does — which is what
+`ROOT_PERSIST_DIR` is for. Without a persistent root, use **Download** and
+**Upload** in the settings modal to keep the file outside the pod and put it
+back afterwards; nothing in it depends on the machine that wrote it beyond the
+paths in it.
+
+*Auto-restore* (off by default) replays the saved session when the page loads
+onto a desktop with no windows open. The server refuses a second automatic
+restore of the same snapshot, so reloading the page cannot launch everything
+twice.
+
+A state file only ever launches what the app registry already offers: an
+installed `.desktop` entry, or — for a browser or a terminal — one of a fixed
+set of binaries. An uploaded file cannot name a command to run, which matters
+because the file can arrive from outside the pod.
+
 ### Deployment shapes
 
 **One container** — `clouddesktop-full`. Nothing to wire up:
@@ -538,6 +596,13 @@ All routes are unauthenticated; the reverse proxy gates them.
 | `GET` | `/api/desktop/apps/icon/:id` | Resolved theme icon for an application (`?size=48`) |
 | `POST` | `/api/desktop/apps/launch` | Launch an installed application by id |
 | `GET`/`PUT` | `/api/desktop/apps/pins` | The app dock's pinned application ids |
+| `GET` | `/api/desktop/state` | Saved session summary, its file path, and the auto-restore setting |
+| `POST` | `/api/desktop/state/save` | Capture the open windows, terminals and browser tabs into the state file |
+| `POST` | `/api/desktop/state/restore` | Replay the saved session (`auto`, `rerunCommands`, `geometry`, `clipboard`) |
+| `GET` | `/api/desktop/state/download` | The state as a downloadable JSON file |
+| `PUT` | `/api/desktop/state` | Replace the state file with an uploaded one (validated) |
+| `DELETE` | `/api/desktop/state` | Forget the saved session |
+| `POST` | `/api/desktop/state/settings` | Auto-restore preference |
 | `POST` | `/api/desktop/launch` | Start an allowlisted app |
 | `POST` | `/api/desktop/upload` | Single-shot upload |
 | `POST` | `/api/desktop/upload/init` `/chunk` `/pause` `/resume` | Chunked upload |

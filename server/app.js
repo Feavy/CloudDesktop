@@ -6,6 +6,7 @@ const helmet = require('helmet');
 const config = require('./config');
 const desktopRoutes = require('./routes/desktop');
 const appRoutes = require('./routes/apps');
+const stateRoutes = require('./routes/state');
 const { createVncWss } = require('./ws-proxy');
 
 const app = express();
@@ -26,7 +27,11 @@ app.use(helmet({
   crossOriginEmbedderPolicy: false,
 }));
 
-app.use(express.json());
+// A session state file is a small document, but an uploaded one can carry a
+// few hundred URLs, so the default 100 kB is not enough headroom for
+// PUT /api/desktop/state. Nothing else here takes a large JSON body; the
+// chunked upload uses its own raw parser.
+app.use(express.json({ limit: '1mb' }));
 
 // Behind the Traefik reverse proxy
 app.set('trust proxy', 1);
@@ -37,6 +42,9 @@ app.use('/api/desktop', desktopRoutes);
 // The app dock's own API. Mounted after the desktop router, whose routes
 // are all exact paths, so nothing collides.
 app.use('/api/desktop/apps', appRoutes);
+// Session state (save/restore the desktop). A path of its own because the
+// desktop router's routes are all exact paths and none of them is /state.
+app.use('/api/desktop/state', stateRoutes);
 
 // Cache policy
 // ------------

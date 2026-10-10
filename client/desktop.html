@@ -200,6 +200,25 @@
         </svg>
       </button>
 
+      <!-- Session state: write the open windows, their terminals and their
+           browser tabs to a file, and put them back later. Aimed at a pod
+           restart, which takes the running session with it. -->
+      <button class="dock-item dock-util" id="btn-save-state" data-label="Save Session">
+        <svg viewBox="0 0 22 22" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M4 3h10l4 4v11a1 1 0 01-1 1H4a1 1 0 01-1-1V4a1 1 0 011-1z"/>
+          <path d="M7 3v5h7V3"/>
+          <rect x="6.5" y="12.5" width="9" height="6.5" rx="0.7"/>
+        </svg>
+      </button>
+
+      <button class="dock-item dock-util" id="btn-restore-state" data-label="Restore Session">
+        <svg viewBox="0 0 22 22" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M3.5 4.5v5h5"/>
+          <path d="M3.9 14.2a8 8 0 100-7L3.5 9.5"/>
+          <path d="M11 7.5v4l3.2 1.8"/>
+        </svg>
+      </button>
+
 
     </div>
 
@@ -278,6 +297,26 @@
         <span class="setting-label">Top Bar</span>
         <button id="settings-topbar" class="toggle-btn">On</button>
       </div>
+      <!-- Session state. Save and Restore live in the left dock; these are the
+           preferences and the file-level actions that go with them. -->
+      <div class="setting-row">
+        <span class="setting-label">Auto-restore</span>
+        <button id="settings-auto-restore" class="toggle-btn">Off</button>
+      </div>
+      <div class="setting-row">
+        <span class="setting-label">Re-run commands</span>
+        <button id="settings-rerun" class="toggle-btn">Off</button>
+      </div>
+      <div class="setting-row">
+        <span class="setting-label">Session file</span>
+        <span class="settings-state-actions">
+          <button id="settings-state-download" class="btn-ghost">Download</button>
+          <button id="settings-state-upload" class="btn-ghost">Upload</button>
+          <button id="settings-state-delete" class="btn-ghost">Delete</button>
+        </span>
+      </div>
+      <input type="file" id="settings-state-file" accept="application/json,.json" hidden>
+      <p id="settings-state-summary" class="settings-version">No saved session</p>
  <button id="settings-close" class="btn-ghost" style="margin-top:18px">Close</button>
       <p id="settings-version" class="settings-version" hidden></p>
     </div>
