@@ -55,6 +55,11 @@ module.exports = {
   // window management.
   DISPLAY: process.env.DISPLAY || ':1',
 
+  // Browser tab / page title of the web client. desktop.html ships a
+  // %PAGE_TITLE% placeholder that app.js substitutes while serving it, so a
+  // deployment can rebrand the tab without patching the client tree.
+  PAGE_TITLE: process.env.PAGE_TITLE || 'CloudDesktop',
+
   // WebSocket endpoint the browser uses for the VNC stream.
   //
   // If you already run websocketify in front of TigerVNC (and expose it

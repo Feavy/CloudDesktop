@@ -80,6 +80,10 @@ spec:
             # --- X display used for xrandr / xclip / wmctrl ------------
             - name: DISPLAY
               value: ":1"
+            # Optional: the browser tab / page title of the web client.
+            # Defaults to CloudDesktop.
+            # - name: PAGE_TITLE
+            #   value: "My Desktop"
             # The dock's "Restart Desktop" button needs no configuration here.
             # With the desktop in a container of its own (the setup this file
             # assumes) the browser ends the session over VNC by pressing the

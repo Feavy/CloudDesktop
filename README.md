@@ -407,6 +407,9 @@ containers:
     env:
       - name: WS_URL
         value: "wss://desktop.example.com/websockify"
+      # Optional: rename the browser tab (defaults to CloudDesktop)
+      - name: PAGE_TITLE
+        value: "My Desktop"
 ```
 
 With `WS_URL` set, the browser talks to websockify directly and the client's own
@@ -456,6 +459,7 @@ All settings are environment variables.
 | `DISPLAY` | `:1` | X display used for `xrandr`/`xclip`/`wmctrl` |
 | `XAUTHORITY` | `$HOME/.Xauthority` | X authority file |
 | `HOME` | passwd entry | Base for `~/Desktop` and `~/Downloads` |
+| `PAGE_TITLE` | `CloudDesktop` | Browser tab / page title of the web client; substituted into `desktop.html` server-side |
 | `RESTART_CMD` | *(unset)* | Restart command used when there is no container to restart (a dev checkout) |
 | `RESTART_MODE` | `auto` | Force how the dock restarts: `auto`, `pod`, `session`, `command` or `off` |
 | `ROOT_PERSIST_DIR` | *(unset)* | Mounted volume to `pivot_root` into at startup, so the whole root filesystem persists; see [Persistent root filesystem](#persistent-root-filesystem) |
