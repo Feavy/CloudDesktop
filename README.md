@@ -195,6 +195,42 @@ All of it is applied through `/etc/xdg`, never a user's `$HOME`: xfconfd treats 
 channel XML file there as that channel's defaults for any user without an override,
 and a container session always starts from a fresh home.
 
+### Desktop shortcuts
+
+The images also drop launchers on the unprivileged user's `~/Desktop`, so a fresh
+session opens with the applications menu one double-click away:
+
+| Shortcut | Source entry | Present when |
+|---|---|---|
+| Terminal | `/usr/share/applications/xfce4-terminal.desktop` | always — `xfce4-terminal` is part of the base XFCE install |
+| Chrome | `/usr/share/applications/google-chrome.desktop` | `INSTALL_BROWSERS=1` |
+| VS Code | `/usr/share/applications/com.microsoft.VSCode.desktop`, else `code.desktop` | `INSTALL_VSCODE=1` |
+| Synaptic | `/usr/local/share/applications/synaptic.desktop` | always |
+
+Each shortcut is a copy of the entry the applications menu already uses, installed
+`0755`. Reusing those entries is deliberate: a shortcut inherits the same `Exec`,
+`Icon` and XDG plumbing as the menu item, so Synaptic keeps going through
+`synaptic-root` — the passwordless-sudo wrapper that exists because the stock
+`synaptic-pkexec` entry needs a polkit agent this session does not run (see
+[Passwordless sudo](#passwordless-sudo)). Icon names resolve through the theme plus
+the `hicolor` fallback, exactly as they do for the [app dock](#the-app-dock).
+
+The executable bit is only half of XFCE 4.18's launcher-trust check. The other half
+is a GVfs attribute, `metadata::xfce-exe-checksum`, holding the sha256 of the file's
+contents; without it XFCE refuses to run the launcher and offers an "Untrusted
+application launcher" prompt instead. That checksum cannot be baked into the image,
+because GVfs journals its metadata per filesystem: it has to be written on the real
+`$HOME` after the container starts, with the session D-Bus already up. That is what
+`/usr/local/bin/trust-desktop-launchers` does on every session start, called from
+`xfce-vnc-session`. It recomputes each launcher's checksum and writes it only when
+it has changed, so an unchanged desktop does not grow the journal, and launchers the
+user adds later are re-trusted the same way.
+
+Because the shortcuts live in the image's `$HOME`, mounting a volume over `$HOME` —
+the `emptyDir` or PVC the Kubernetes manifests use — hides them along with the rest
+of it, just as it hides the seeded `~/.startup.sh` (see
+[Startup script](#startup-script)).
+
 ### The app dock
 
 The dock lives in the web client, at the bottom edge of the browser page — the

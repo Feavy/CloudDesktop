@@ -863,13 +863,19 @@ log "Default terminal working directory: $DESKTOP_HOME"
 # other half (a GVfs checksum attribute) is seeded at session start by
 # /usr/local/bin/trust-desktop-launchers, see section 11.
 #
+# Terminal and Synaptic are the two shortcuts every build gets -- xfce4-terminal
+# is part of the base XFCE install (section 7) and synaptic is installed
+# unconditionally, while Chrome and VS Code appear only when their INSTALL_*
+# package is present (section 9).
+#
 # VS Code's deb ships its launcher as com.microsoft.VSCode.desktop; accept the
 # older code.desktop name too so a pinned repo cannot silently lose the
 # shortcut.
 VSCODE_DESKTOP="/usr/share/applications/com.microsoft.VSCode.desktop"
 [ -f "$VSCODE_DESKTOP" ] || VSCODE_DESKTOP="/usr/share/applications/code.desktop"
-log "Adding desktop shortcuts (Chrome, VS Code, Synaptic)"
+log "Adding desktop shortcuts (Terminal, Chrome, VS Code, Synaptic)"
 for shortcut_src in \
+    /usr/share/applications/xfce4-terminal.desktop \
     /usr/share/applications/google-chrome.desktop \
     "$VSCODE_DESKTOP" \
     /usr/local/share/applications/synaptic.desktop; do
