@@ -29,6 +29,21 @@
   /* Sizes */
   --topbar-h:    28px;
   --dock-item-sz: 44px;
+  /* Size of the left-edge hotzone that reveals the dock: a band centred on
+     the marker, not the full edge, so it stays out of the way of taps and
+     drags meant for the remote desktop. */
+  --dock-trigger-w: 20px;
+  --dock-trigger-h: min(30vh, 240px);
+  /* Thickness of the marker pill. The pill is centred in the hotzone band,
+     so (--dock-trigger-w - --dock-trigger-pill) / 2 is how far it sits from
+     the page edge; the app dock uses the same figure so both markers line
+     up at the edge. */
+  --dock-trigger-pill: 4px;
+  /* How far both dock panels sit from the page edge they are parked on:
+     the left dock's `left`, the app dock's `bottom`. One value for both
+     docks at every breakpoint, so neither panel touches the edge and the
+     two stay visually in step. */
+  --dock-edge-gap: 6px;
 }
 
 [data-theme="light"] {
@@ -185,26 +200,52 @@ body.mobile-fullscreen #vnc-container { inset: 0 !important; }
 /* ═══════════════════════════════════════════════════════════
    Dock Trigger Zone
    ═══════════════════════════════════════════════════════════ */
+/* Hover/touch hotzone along the left edge, where the dock slides in from.
+   The element itself is invisible; the pill it renders is the marker that
+   tells you where the dock is parked, on every screen size. The hotzone is a
+   band centred on the marker rather than the full edge, so taps and drags
+   meant for the remote desktop keep working along the rest of it. */
 .dock-trigger {
-  position: fixed; bottom: 0; left: 0; right: 0;
-  height: 14px; z-index: 799;
-  /* invisible touch/hover hotzone */
+  position: fixed;
+  top: 50%; left: 0;
+  transform: translateY(-50%);
+  width: var(--dock-trigger-w, 20px);
+  height: var(--dock-trigger-h, min(30vh, 240px));
+  z-index: 799;
+  display: flex; align-items: center; justify-content: center;
 }
 
+/* Marker pill — the same visual cue phones have always shown. */
+.dock-trigger::after {
+  content: '';
+  width: var(--dock-trigger-pill, 4px); height: 40px;
+  background: var(--text-muted);
+  opacity: 0.85;
+  border-radius: 2px;
+  transition: opacity 0.15s ease;
+}
+.dock-trigger:hover::after { opacity: 1; }
+
 /* ═══════════════════════════════════════════════════════════
-   Dock — macOS floating bar
+   Dock — vertical control strip on the left edge
+
+   This strip holds only the web client's controls (upload, download,
+   resolution, fullscreen, restart, settings). Application launching lives
+   in the app dock at the bottom of the page (appdock.css), which replaced
+   the desktop's Plank dock.
    ═══════════════════════════════════════════════════════════ */
 .dock {
   position: fixed;
-  bottom: 6px;
-  left: 50%;
-  transform: translateX(-50%) translateY(calc(100% + 12px));
+  left: var(--dock-edge-gap, 6px);
+  top: 50%;
+  transform: translateY(-50%) translateX(calc(-100% - 12px));
   z-index: 800;
 
   display: flex;
-  align-items: flex-end;
+  flex-direction: column;
+  align-items: center;
   gap: 2px;
-  padding: 8px 10px;
+  padding: 8px 8px;
 
   background: var(--dock-bg);
   border: 0.5px solid var(--dock-border);
@@ -222,20 +263,20 @@ body.mobile-fullscreen #vnc-container { inset: 0 !important; }
   will-change: transform;
 }
 
-.dock.visible    { transform: translateX(-50%) translateY(0); }
-.dock.no-autohide{ transform: translateX(-50%) translateY(0); }
+.dock.visible    { transform: translateY(-50%) translateX(0); }
+.dock.no-autohide{ transform: translateY(-50%) translateX(0); }
 
 /* Dock section groups */
 .dock-section {
-  display: flex; align-items: flex-end; gap: 4px;
+  display: flex; flex-direction: column; align-items: center; gap: 4px;
 }
 
 /* Separator */
 .dock-sep {
-  width: 1px; height: 38px;
+  width: 30px; height: 1px;
   background: var(--dock-border);
   opacity: 0.55;
-  margin: 0 4px;
+  margin: 4px 0;
   align-self: center;
   flex-shrink: 0;
 }
@@ -254,13 +295,13 @@ body.mobile-fullscreen #vnc-container { inset: 0 !important; }
   -webkit-tap-highlight-color: transparent;
 }
 
-/* Tooltip */
+/* Tooltip — to the right of an item, since the dock is vertical */
 .dock-item::after {
   content: attr(data-label);
   position: absolute;
-  bottom: calc(100% + 10px);
-  left: 50%;
-  transform: translateX(-50%) translateY(6px);
+  left: calc(100% + 10px);
+  top: 50%;
+  transform: translateY(-50%) translateX(-6px);
   background: var(--tooltip-bg);
   color: #fff;
   font-size: 11.5px; font-weight: 500;
@@ -276,54 +317,18 @@ body.mobile-fullscreen #vnc-container { inset: 0 !important; }
 }
 .dock-item:hover::after {
   opacity: 1;
-  transform: translateX(-50%) translateY(0);
+  transform: translateY(-50%) translateX(0);
 }
 /* Suppress tooltip on touch to avoid sticky state */
 @media (hover: none) { .dock-item::after { display: none; } }
 
-/* ── App icons — same height as utility, icon fills the box ── */
-.dock-app {
-  width: var(--dock-item-sz);
-  height: var(--dock-item-sz);
-}
-
-.dock-app .app-icon {
-  width: var(--dock-item-sz);
-  height: var(--dock-item-sz);
-  border-radius: 11px;
-  overflow: hidden;
-  flex-shrink: 0;
-  filter: drop-shadow(0 3px 6px rgba(0, 0, 0, 0.35));
-  transition: filter 0.2s ease;
-}
-.dock-app:hover .app-icon {
-  filter: drop-shadow(0 4px 10px rgba(0, 0, 0, 0.5));
-}
-.dock-app .app-icon svg {
-  width: 100%; height: 100%; display: block;
-}
-.dock-app .app-icon-img {
-  width: var(--dock-item-sz); height: var(--dock-item-sz);
-  border-radius: 11px;
-  object-fit: contain; display: block;
-  filter: drop-shadow(0 3px 6px rgba(0, 0, 0, 0.35));
-  transition: filter 0.2s ease;
-}
-.dock-app:hover .app-icon-img {
-  filter: drop-shadow(0 4px 10px rgba(0, 0, 0, 0.5));
-}
-
-/* Active press */
-.dock-app:active .app-icon,
-.dock-app:active .app-icon-img {
-  filter: brightness(0.82) drop-shadow(0 2px 4px rgba(0,0,0,0.3));
-}
-
-/* ── Utility icons — same size, pill background ── */
+/* ── Utility buttons ──
+   No resting tile: the buttons read as icons, the same as the app dock's
+   items, and only take a background while hovered. */
 .dock-util {
   width: var(--dock-item-sz);
   height: var(--dock-item-sz);
-  background: var(--dock-item-bg);
+  background: none;
   border-radius: 11px;
   color: var(--text);
   transition: background 0.15s ease;
@@ -333,12 +338,13 @@ body.mobile-fullscreen #vnc-container { inset: 0 !important; }
 .dock-util:hover svg { opacity: 1; }
 .dock-util:active { filter: brightness(0.82); }
 
-/* ── Window switcher popup ── */
+/* ── Window switcher popup ──
+   Opens beside the dock on the left; the bottom edge is the app dock's. */
 .window-list {
   position: fixed;
-  bottom: 70px;
-  left: 50%;
-  transform: translateX(-50%);
+  top: 50%;
+  left: 84px;
+  transform: translateY(-50%);
   z-index: 850;
   background: var(--surface);
   border: 0.5px solid var(--dock-border);
@@ -357,8 +363,8 @@ body.mobile-fullscreen #vnc-container { inset: 0 !important; }
 }
 .window-list[hidden] { display: none; }
 @keyframes wl-in {
-  from { opacity: 0; transform: translateX(-50%) translateY(6px) scale(0.96); }
-  to   { opacity: 1; transform: translateX(-50%) translateY(0) scale(1); }
+  from { opacity: 0; transform: translateY(-50%) translateX(-6px) scale(0.96); }
+  to   { opacity: 1; transform: translateY(-50%) translateX(0) scale(1); }
 }
 .window-list-header {
   font-size: 11px; font-weight: 600; color: var(--text-muted);
@@ -823,8 +829,8 @@ body.mobile-fullscreen #vnc-container { inset: 0 !important; }
 /* Tablet / small desktop */
 @media (max-width: 900px) {
   :root { --dock-item-sz: 40px; }
-  .dock { gap: 1px; padding: 6px 8px; }
-  .dock-sep { margin: 0 3px; }
+  .dock { gap: 1px; padding: 6px 6px; }
+  .dock-sep { margin: 3px 0; }
 }
 
 /* Mobile phones */
@@ -832,6 +838,11 @@ body.mobile-fullscreen #vnc-container { inset: 0 !important; }
   :root {
     --topbar-h: 0px;
     --dock-item-sz: 38px;
+    /* Larger hotzone band on phones; the ::before knob defined with the
+       trigger rules below stretches it to the dock's own width too. */
+    --dock-trigger-w: 24px;
+    --dock-trigger-h: min(60vh, 360px);
+    --dock-trigger-pill: 5px;
   }
 
   /* ── Hide topbar on mobile — maximize VNC space ── */
@@ -842,43 +853,48 @@ body.mobile-fullscreen #vnc-container { inset: 0 !important; }
     inset: 0;
   }
 
-  /* ── Dock: compact horizontal bar from bottom ── */
+  /* ── Dock: vertical control strip on the left, same as desktop ──
+     Kept on the left rather than the bottom so it never covers the app
+     dock, which owns the bottom edge of the page. */
   .dock {
-    bottom: 0;
-    left: 0; right: 0;
-    transform: translateY(calc(100% + 4px));
-    width: 100%;
-    border-radius: 14px 14px 0 0;
-    border-bottom: none;
-    overflow-x: auto;
-    overflow-y: hidden;
+    left: var(--dock-edge-gap, 6px);
+    top: 50%;
+    /* Parked fully clear of the gap, otherwise a sliver of the panel stays
+       on screen while it is meant to be hidden. */
+    transform: translateY(-50%) translateX(calc(-100% - 12px));
+    /* No flush-drawer overrides: the panel floats 6px off the edge like it
+       does on desktop, so it keeps its full radius and border. */
+    max-height: calc(100vh - 16px);
+    overflow-y: auto;
+    overflow-x: hidden;
     scrollbar-width: none;
     -webkit-overflow-scrolling: touch;
-    padding: 6px 8px calc(4px + env(safe-area-inset-bottom, 0px));
+    padding: 6px 6px;
     gap: 2px;
     flex-wrap: nowrap;
     box-shadow:
-      0 -2px 20px rgba(0, 0, 0, 0.5),
+      2px 0 20px rgba(0, 0, 0, 0.5),
       inset 0 0.5px 0 rgba(255, 255, 255, 0.12);
     transition: transform 0.3s cubic-bezier(0.32, 0.72, 0, 1);
   }
   .dock::-webkit-scrollbar { display: none; }
 
-  .dock.visible    { transform: translateY(0); }
-  .dock.no-autohide{ transform: translateY(0); }
+  .dock.visible    { transform: translateY(-50%) translateX(0); }
+  .dock.no-autohide{ transform: translateY(-50%) translateX(0); }
 
-  /* Dock sections stay as flex rows */
+  /* Dock sections stay as flex columns */
   .dock-section {
     display: flex;
+    flex-direction: column;
     flex-wrap: nowrap;
     gap: 3px;
     flex-shrink: 0;
   }
 
-  /* Separators stay vertical but shorter */
+  /* Separators stay horizontal but shorter */
   .dock-sep {
-    width: 1px; height: 26px;
-    margin: 0 2px;
+    width: 26px; height: 1px;
+    margin: 2px 0;
     flex-shrink: 0;
   }
 
@@ -889,13 +905,6 @@ body.mobile-fullscreen #vnc-container { inset: 0 !important; }
   .dock-item { flex-shrink: 0; }
   .dock-item:active { transform: scale(0.9); }
 
-  /* App icons */
-  .dock-app .app-icon,
-  .dock-app .app-icon-img {
-    width: var(--dock-item-sz); height: var(--dock-item-sz);
-    border-radius: 9px;
-  }
-
   /* Utility icons */
   .dock-util {
     width: var(--dock-item-sz); height: var(--dock-item-sz);
@@ -903,16 +912,23 @@ body.mobile-fullscreen #vnc-container { inset: 0 !important; }
   }
   .dock-util svg { width: 17px; height: 17px; }
 
-  /* Dock trigger: pill indicator at bottom */
-  .dock-trigger {
-    height: 20px;
-    display: flex; align-items: center; justify-content: center;
+  /* Dock trigger: pill indicator on the left edge, with a much larger
+     touch target than the visible sliver suggests.
+     - The element is a centred band (--dock-trigger-w × --dock-trigger-h),
+       not the full edge, so taps elsewhere reach the remote desktop.
+     - ::before stretches that band to the dock's own width, so the open
+       dock always covers the enlarged target instead of leaving a sliver. */
+  .dock-trigger::before {
+    content: '';
+    position: absolute;
+    top: 0; bottom: 0; left: 0;
+    /* Matches the dock's own width (item size + padding), so the open dock
+       always covers the enlarged touch target instead of leaving a sliver. */
+    width: calc(var(--dock-item-sz) + 10px);
+    /* invisible — it only enlarges the touch hitbox */
   }
   .dock-trigger::after {
-    content: '';
-    width: 36px; height: 4px;
-    background: rgba(255, 255, 255, 0.3);
-    border-radius: 2px;
+    width: var(--dock-trigger-pill, 5px); height: 44px;
   }
 
   /* ── Bottom-sheet modals ── */
@@ -962,17 +978,16 @@ body.mobile-fullscreen #vnc-container { inset: 0 !important; }
   .modal-card[style*="max-width:500px"] { max-width: 100% !important; }
   .fb-entry { padding: 10px 10px; }
 
-  /* Window list on mobile */
+  /* Window list on mobile: full-height panel from the left, beside the dock */
   .window-list {
-    bottom: 0; left: 0; right: 0;
+    top: 0; bottom: 0; left: 0;
     transform: none;
-    border-radius: 16px 16px 0 0;
-    max-height: 50vh;
-    padding-bottom: env(safe-area-inset-bottom, 0px);
+    border-radius: 0 16px 16px 0;
+    max-height: 100vh;
   }
   @keyframes wl-in {
-    from { opacity: 0; transform: translateY(20px); }
-    to   { opacity: 1; transform: translateY(0); }
+    from { opacity: 0; transform: translateX(-20px); }
+    to   { opacity: 1; transform: translateX(0); }
   }
 
   /* Status overlay */
@@ -983,10 +998,10 @@ body.mobile-fullscreen #vnc-container { inset: 0 !important; }
 /* Very small phones (< 380px) */
 @media (max-width: 380px) {
   :root { --dock-item-sz: 34px; }
-  .dock { padding: 5px 6px calc(3px + env(safe-area-inset-bottom, 0px)); gap: 1px; }
+  .dock { padding: 5px 5px; gap: 1px; }
   .dock-section { gap: 2px; }
   .dock-util svg { width: 15px; height: 15px; }
-  .dock-sep { height: 22px; }
+  .dock-sep { width: 22px; }
 }
 
 /* Landscape mobile — move toolbar to top-right */
@@ -1003,7 +1018,7 @@ body.mobile-fullscreen #vnc-container { inset: 0 !important; }
     margin: 0 2px;
   }
   .dock {
-    max-height: 55vh;
+    max-height: 70vh;
   }
 }
 
@@ -1016,7 +1031,7 @@ body.mobile-fullscreen #vnc-container { inset: 0 !important; }
   .topbar { display: none !important; }
   #vnc-container { inset: 0 !important; }
   .dock {
-    padding-top: max(6px, env(safe-area-inset-top, 0px));
+    padding-left: max(6px, env(safe-area-inset-left, 0px));
   }
 }
 
@@ -1051,9 +1066,12 @@ body.standalone-app textarea {
 }
 
 /* iOS Safari safe areas */
-@supports (padding: env(safe-area-inset-bottom)) {
+@supports (padding: env(safe-area-inset-left)) {
   .dock {
-    padding-bottom: calc(8px + env(safe-area-inset-bottom, 0px));
+    padding-left: calc(6px + env(safe-area-inset-left, 0px));
+  }
+  .dock-trigger {
+    width: calc(var(--dock-trigger-w, 20px) + env(safe-area-inset-left, 0px));
   }
   .modal-card {
     padding-bottom: calc(16px + env(safe-area-inset-bottom, 0px));
@@ -1157,6 +1175,7 @@ svg.fs-icon-expand[hidden], svg.fs-icon-compress[hidden] { display: none; }
 .kb-special-bar[hidden] { display: none; }
 
 .kb-special-key {
+  position: relative;
   flex: 0 0 auto;
   min-width: 54px;
   height: 40px;
@@ -1175,6 +1194,21 @@ svg.fs-icon-expand[hidden], svg.fs-icon-compress[hidden] { display: none; }
   transition: background 0.12s;
 }
 .kb-special-key.pressed { background: rgba(255, 255, 255, 0.2); }
+/* Sticky keys carry a small dash below the label: the mark of a key that can
+   stay pressed. It brightens while latched so the held state is legible too. */
+.kb-special-key.sticky::after {
+  content: '';
+  position: absolute;
+  left: 50%;
+  bottom: 5px;
+  width: 14px;
+  height: 2.5px;
+  border-radius: 2px;
+  background: currentColor;
+  opacity: 0.45;
+  transform: translateX(-50%);
+}
+.kb-special-key.sticky.latched::after { opacity: 0.9; }
 /* Sticky keys while latched (down on the remote desktop) */
 .kb-special-key.latched {
   background: var(--accent);
@@ -1183,21 +1217,18 @@ svg.fs-icon-expand[hidden], svg.fs-icon-compress[hidden] { display: none; }
 }
 
 /* ═══════════════════════════════════════════════════════════
-   Touch Cursor Overlay (trackpad mode arrow)
+   Remote cursor (touch devices)
    ═══════════════════════════════════════════════════════════ */
-.touch-cursor {
-  position: fixed;
-  z-index: 890;
-  pointer-events: none;
-  /* Offset so SVG arrow tip aligns with cursor position */
-  transform: translate(-4px, -1px);
-}
-.touch-cursor[hidden] { display: none; }
-
-.cursor-arrow {
-  display: block;
-  filter: drop-shadow(0 1px 3px rgba(0, 0, 0, 0.6));
-}
+/* On touch devices noVNC cannot set a CSS cursor, so it requests the RFB cursor
+   pseudo-encoding and paints the desktop's own cursor -- arrow, I-beam, hand,
+   resize grip, whatever the element under it calls for -- on a fixed canvas it
+   appends to <body>, at its own z-index of 65535. That parks the pointer on top
+   of every browser-side control, so keep it above the framebuffer but below the
+   client's UI (dock triggers and dock 799-850, special-keys bar 860, modals and
+   overlays 8000+, toasts 9400-9500). The framebuffer canvas lives inside
+   #vnc-container, so a body-level canvas is the cursor layer. desktop.js
+   re-anchors that image on the trackpad point. */
+body > canvas { z-index: 700 !important; }
 
 /* VNC container clip when zoomed */
 #vnc-container { overflow: hidden; }

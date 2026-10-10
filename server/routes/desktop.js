@@ -6,6 +6,7 @@ const path = require('path');
 const fs = require('fs');
 const multer = require('multer');
 const config = require('../config');
+const apps = require('../apps');
 
 const router = express.Router();
 
@@ -65,19 +66,23 @@ const storage = multer.diskStorage({
 });
 const upload = multer({ storage, limits: { fileSize: 100 * 1024 * 1024 } });
 
-// Allowlisted apps for launch endpoint
+// Allowlisted apps for the launch endpoint. The web client's app dock
+// launches from installed .desktop entries instead (see routes/apps.js);
+// this endpoint stays part of the HTTP API for other consumers.
 const ALLOWED_APPS = {
+  filemanager: { cmd: 'thunar', args: [] },
   terminal: { cmd: 'xfce4-terminal', args: [] },
-  firefox: { cmd: 'firefox', args: ['--no-remote'] },
+  // synaptic-root (written by install.sh) launches Synaptic as root on the
+  // session display; synaptic itself must not run unprivileged.
+  synaptic: { cmd: 'synaptic-root', args: [] },
   chrome: { cmd: 'google-chrome', args: ['--no-sandbox', '--no-first-run'] },
   vscode: { cmd: 'code', args: ['--no-sandbox'] },
-  filemanager: { cmd: 'thunar', args: [] },
-  editor: { cmd: 'mousepad', args: [] },
 };
 
-// Only offer dock icons for apps that are actually installed in this pod.
-// A minimal image has no Chrome or Firefox, and a dead icon is worse than a
-// missing one. Resolved once at startup because the package set is static.
+// Report which allowlisted apps are actually installed in this pod, as
+// `/config.canLaunch`. Kept for API consumers; the current web client
+// launches through the .desktop registry in routes/apps.js instead.
+// Resolved once at startup because the package set is static.
 const availableApps = Object.entries(ALLOWED_APPS)
   .filter(([, app]) => {
     const found = (process.env.PATH || '').split(':').some((dir) => {
@@ -85,20 +90,67 @@ const availableApps = Object.entries(ALLOWED_APPS)
       try { fs.accessSync(path.join(dir, app.cmd), fs.constants.X_OK); return true; }
       catch { return false; }
     });
-    if (!found) console.log(`Dock: '${app.cmd}' not found, hiding its icon`);
+    if (!found) console.log(`Launch: '${app.cmd}' not found, omitting it from canLaunch`);
     return found;
   })
   .map(([name]) => name);
 
-// GET /api/desktop/config — dock configuration + environment info
+// ── How a restart reaches the desktop ──────────────────────
+//
+//   'pod'     the desktop lives in this container (the all-in-one image), so
+//             exiting restarts everything;
+//   'session' it lives in a container of its own, and the VNC session is the
+//             only channel that reaches it: the browser presses a shortcut
+//             bound to xfce4-session-logout --logout, the session ends, and
+//             start-vnc's watcher tears the desktop container down;
+//   'command' no container at all (a dev checkout), so the deployment has to
+//             supply RESTART_CMD;
+//   'off'     none of the above — the dock hides the button.
+//
+// The processes of the all-in-one image are siblings in our own PID namespace;
+// a sidecar's are not visible at all. That is only a guess, so RESTART_MODE
+// can force any of the four.
+const DESKTOP_COMMS = /^(Xtigervnc|Xvnc|Xtightvnc|xfce4-session)$/;
+
+function desktopIsLocal() {
+  try {
+    for (const entry of fs.readdirSync('/proc')) {
+      if (!/^\d+$/.test(entry)) continue;
+      let comm;
+      try {
+        comm = fs.readFileSync(`/proc/${entry}/comm`, 'utf8').trim();
+      } catch {
+        continue; // the process exited between the readdir and the read
+      }
+      if (DESKTOP_COMMS.test(comm)) return true;
+    }
+  } catch { /* no /proc to inspect — assume the desktop is elsewhere */ }
+  return false;
+}
+
+function restartMode() {
+  const forced = config.RESTART_MODE;
+  if (forced !== 'auto') {
+    if (forced === 'command') return config.RESTART_CMD ? 'command' : 'off';
+    if (forced === 'pod' || forced === 'session' || forced === 'off') return forced;
+    return 'off'; // unrecognised value: never guess at a restart
+  }
+  if (config.IS_CONTAINER) return desktopIsLocal() ? 'pod' : 'session';
+  return config.RESTART_CMD ? 'command' : 'off';
+}
+
+// GET /api/desktop/config — environment info and which dock actions apply
 router.get('/config', (_req, res) => {
+  const mode = restartMode();
   res.json({
     homeDir: RUN_HOME,
     desktopDir: DESKTOP_DIR,
     // External websocketify endpoint, or empty to use this server's bridge
     wsUrl: config.WS_URL,
-    // The dock only offers "restart" when the deployment told us how
-    canRestart: Boolean(config.RESTART_CMD),
+    // The dock only offers "restart" when there is a way to do it, and it has
+    // to know which one: the browser performs 'session' itself over VNC.
+    canRestart: mode !== 'off',
+    restartMode: mode,
     canLaunch: availableApps,
   });
 });
@@ -162,19 +214,51 @@ router.post('/resolution', (req, res) => {
 
 // POST /api/desktop/restart
 //
-// There is no service manager inside the pod, so the command to cycle the VNC
-// server is supplied by the deployment (RESTART_CMD). Without it the dock
-// hides this action entirely.
+// Restarts the pod. Both shipped images run this web client as the process the
+// container runtime watches, so exiting is enough: entrypoint.sh waits on it
+// and exits when it goes (Dockerfile.full), and in the web-client-only image
+// it is PID 1 itself (Dockerfile.client). Kubernetes then starts the pod
+// again. The response goes out first on purpose — exiting before it leaves the
+// socket would reset the connection and look like a failure to the browser.
+//
+// The other modes do not come through here: with the desktop in a separate
+// container the browser ends the session over VNC itself (restartMode()
+// reports 'session'), and outside a container the deployment's command runs.
 router.post('/restart', (_req, res) => {
-  if (!config.RESTART_CMD) {
-    return res.status(501).json({ error: 'Restart is not configured for this deployment' });
+  const mode = restartMode();
+
+  if (mode === 'pod') {
+    res.json({ ok: true, mode: 'pod' });
+    res.on('finish', () => {
+      // The short delay lets the response reach the browser before the
+      // process disappears.
+      setTimeout(() => {
+        console.log('Restart requested: exiting so the container runtime restarts the pod.');
+        process.exit(1);
+      }, 300);
+    });
+    return;
+  }
+
+  if (mode === 'session') {
+    // Restarting the desktop container is not something this process can do:
+    // it is not the container being restarted and it cannot signal across the
+    // container boundary. The browser has to do it through the session.
+    return res.status(409).json({
+      error: 'The desktop runs in a separate container; restart it from the session',
+      mode: 'session',
+    });
+  }
+
+  if (mode !== 'command') {
+    return res.status(501).json({ error: 'Restart is not available for this deployment' });
   }
 
   exec(config.RESTART_CMD, { env: X_ENV }, (err) => {
     if (err) {
       return res.status(500).json({ error: 'Failed to restart the desktop session' });
     }
-    res.json({ ok: true });
+    res.json({ ok: true, mode: 'command' });
   });
 });
 
@@ -391,25 +475,68 @@ router.post('/launch', (req, res) => {
 });
 
 // GET /api/desktop/windows — list open X11 windows
-router.get('/windows', (_req, res) => {
-  execFile('wmctrl', ['-l', '-p'], { env: X_ENV }, (err, stdout) => {
-    if (err) {
-      return res.json({ windows: [] });
-    }
-    const windows = [];
-    for (const line of stdout.trim().split('\n')) {
-      if (!line) continue;
-      // Format: 0x00c0002c  0  1234  hostname Title here
-      const m = line.match(/^(0x[\da-f]+)\s+(-?\d+)\s+(\d+)\s+\S+\s+(.+)$/i);
-      if (!m) continue;
-      const desktop = parseInt(m[2], 10);
-      const title = m[4].trim();
-      // Skip the root desktop window and negative desktop entries
-      if (desktop < 0 || title === 'Desktop') continue;
-      windows.push({ id: m[1], pid: parseInt(m[3], 10), title });
-    }
-    res.json({ windows });
+//
+// Two wmctrl calls, correlated by window id: `-l -p` for pid + title (its
+// column layout is unambiguous) and `-l -x` for the WM_CLASS, which is what
+// ties a window back to the application that owns it for the dock's running
+// indicators.
+router.get('/windows', async (_req, res) => {
+  const execP = (args) => new Promise((resolve) => {
+    execFile('wmctrl', args, { env: X_ENV }, (err, stdout) => resolve(err ? '' : String(stdout)));
   });
+
+  const [basic, withClass] = await Promise.all([
+    execP(['-l', '-p']),
+    execP(['-l', '-x']),
+  ]);
+
+  // Titles first: they anchor the -x parse below.
+  const titleById = new Map();
+  const windows = [];
+  for (const line of basic.trim().split('\n')) {
+    if (!line) continue;
+    // Format: 0x00c0002c  0  1234  hostname Title here
+    const m = line.match(/^(0x[\da-f]+)\s+(-?\d+)\s+(\d+)\s+\S+\s+(.+)$/i);
+    if (!m) continue;
+    const desktop = parseInt(m[2], 10);
+    const title = m[4].trim();
+    // Skip the root desktop window and negative desktop entries
+    if (desktop < 0 || title === 'Desktop') continue;
+    titleById.set(m[1].toLowerCase(), title);
+    windows.push({ id: m[1], pid: parseInt(m[3], 10), title, wmClass: null, appId: null });
+  }
+
+  const classById = new Map();
+  for (const line of withClass.split('\n')) {
+    const idm = line.match(/^(0x[\da-f]+)\s/i);
+    if (!idm) continue;
+    const id = idm[1].toLowerCase();
+
+    // wmctrl prints the WM_CLASS as `instance.Class` right before the
+    // title. With the title known from the -p parse, the class token is
+    // simply the last token ahead of it — which also survives builds that
+    // drop the hostname column.
+    const title = titleById.get(id);
+    let wmClass = null;
+    if (title && line.endsWith(title)) {
+      const head = line.slice(0, line.length - title.length).trim().split(/\s+/);
+      const cand = head[head.length - 1];
+      if (cand && cand.includes('.') && !/^-?\d+$/.test(cand)) wmClass = cand;
+    }
+    if (!wmClass) {
+      // Fallback to the canonical column layout: id desktop host class title
+      const m = line.match(/^(0x[\da-f]+)\s+(-?\d+)\s+(\S+)\s+(\S+)\s+(.*)$/i);
+      if (m) wmClass = /\./.test(m[4]) ? m[4] : (/\./.test(m[3]) ? m[3] : null);
+    }
+    if (wmClass) classById.set(id, wmClass);
+  }
+
+  for (const win of windows) {
+    win.wmClass = classById.get(win.id.toLowerCase()) || null;
+    win.appId = apps.matchWindow({ wmClass: win.wmClass, pid: win.pid, title: win.title }) || null;
+  }
+
+  res.json({ windows });
 });
 
 // POST /api/desktop/windows/focus — raise and focus a window
@@ -421,6 +548,41 @@ router.post('/windows/focus', (req, res) => {
   execFile('wmctrl', ['-i', '-a', id], { env: X_ENV }, (err) => {
     if (err) {
       return res.status(500).json({ error: 'Failed to focus window' });
+    }
+    res.json({ ok: true });
+  });
+});
+
+// POST /api/desktop/windows/close — ask a window to close (graceful, like
+// its own close button: the WM gets a _NET_CLOSE_WINDOW, the app may still
+// show an "unsaved work" dialog).
+router.post('/windows/close', (req, res) => {
+  const { id } = req.body;
+  if (!id || typeof id !== 'string' || !/^0x[\da-f]+$/i.test(id)) {
+    return res.status(400).json({ error: 'Invalid window id' });
+  }
+  execFile('wmctrl', ['-i', '-c', id], { env: X_ENV }, (err) => {
+    if (err) {
+      return res.status(500).json({ error: 'Failed to close window' });
+    }
+    res.json({ ok: true });
+  });
+});
+
+// POST /api/desktop/windows/minimize — iconify a window
+//
+// _NET_WM_STATE_HIDDEN is the state the WM sets on an iconified window, and
+// xfwm4 accepts it from a client too (wmctrl -b add,hidden), so no separate
+// "restore" route is needed: /windows/focus raises and focuses the window,
+// which clears the flag and brings it back.
+router.post('/windows/minimize', (req, res) => {
+  const { id } = req.body;
+  if (!id || typeof id !== 'string' || !/^0x[\da-f]+$/i.test(id)) {
+    return res.status(400).json({ error: 'Invalid window id' });
+  }
+  execFile('wmctrl', ['-i', '-r', id, '-b', 'add,hidden'], { env: X_ENV }, (err) => {
+    if (err) {
+      return res.status(500).json({ error: 'Failed to minimize window' });
     }
     res.json({ ok: true });
   });

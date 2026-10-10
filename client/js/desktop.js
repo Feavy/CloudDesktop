@@ -1,6 +1,8 @@
 import RFB from '/vendor/novnc/core/rfb.js';
 import { notify, init as initNotifications } from '/js/notifications.js?cv=%CACHE_VERSION%';
 import { createMobileKeyboard } from '/js/mobile-keyboard.js?cv=%CACHE_VERSION%';
+import { initAppDock, hideAppDock, setAppDockAutoHide, iconUrl } from '/js/appdock.js?cv=%CACHE_VERSION%';
+import { sendRestartShortcut } from '/js/session-restart.js?cv=%CACHE_VERSION%';
 
 const statusOverlay = document.getElementById('status-overlay');
 const statusText    = document.getElementById('status-text');
@@ -18,6 +20,9 @@ const downloads = new Map();
 
 let rfb = null;
 let reconnectTimer = null;
+// Tracked ourselves: noVNC exposes no public "connected" flag, and the restart
+// path needs to know whether there is a session to send keys to.
+let vncUp = false;
 // Set on touch devices only; guards autoFitResolution while the soft keyboard
 // is animating in or out. See mobile-keyboard.js.
 let keyboard = null;
@@ -86,12 +91,14 @@ async function connect() {
 }
 
 function onConnect() {
+  vncUp = true;
   hideStatus();
   rfb.focus();
   notify('Connected to desktop', 'success', 3000);
 }
 
 function onDisconnect(e) {
+  vncUp = false;
   const clean = (e.detail || {}).clean;
   showStatus(clean ? 'Disconnected from desktop.' : 'Connection lost. Reconnecting…');
   notify(clean ? 'Disconnected from desktop' : 'Connection lost — reconnecting…', 'warning');
@@ -234,8 +241,9 @@ vncContainer.addEventListener('keydown', async (e) => {
 const dock        = document.getElementById('dock');
 const dockTrigger = document.getElementById('dock-trigger');
 let dockHideTimer = null;
-// Force auto-hide on mobile, respect setting on desktop
-let dockAutoHide  = isMobile ? true : (localStorage.getItem('dock-autohide') === 'on');
+// Auto-hide is the default everywhere — the dock slides away and the left-edge
+// marker shows where it is. The Settings toggle persists an explicit opt-out.
+let dockAutoHide  = localStorage.getItem('dock-autohide') !== 'off';
 
 function showDock() {
   clearTimeout(dockHideTimer);
@@ -261,9 +269,22 @@ function applyAutoHide() {
   }
 }
 
-// Mouse trigger (desktop)
-dockTrigger.addEventListener('mouseenter', showDock);
-dock.addEventListener('mouseenter', showDock);
+// Mouse trigger (desktop). A real touch suppresses the compatibility mouse
+// events the browser synthesises from it, but on hybrid devices a stray mouse
+// event can still arrive right after a touch — and mouseenter calls showDock,
+// which would cancel the auto-hide timer the touch path just scheduled. So
+// mouse events are ignored for a moment after any touch.
+let lastTouchAt = 0;
+document.addEventListener('touchstart', () => { lastTouchAt = Date.now(); },
+  { capture: true, passive: true });
+const fromTouch = () => Date.now() - lastTouchAt < 1000;
+
+dockTrigger.addEventListener('mouseenter', () => { if (!fromTouch()) showDock(); });
+// Leaving the hotzone without entering the dock must still arm the timer —
+// the hotzone is only a band around the marker, so this is the normal way a
+// hover ends when the pointer moves off along the edge.
+dockTrigger.addEventListener('mouseleave', scheduleDockHide);
+dock.addEventListener('mouseenter', () => { if (!fromTouch()) showDock(); });
 dock.addEventListener('mouseleave', scheduleDockHide);
 
 // Touch trigger — tap bottom edge to toggle dock
@@ -277,13 +298,23 @@ dockTrigger.addEventListener('touchstart', (e) => {
   }
 }, { passive: false });
 
-// Close dock when tapping VNC area or any dock button on mobile
-if (isTouch) {
-  vncContainer.addEventListener('touchstart', () => {
-    if (dock.classList.contains('visible')) hideDock();
-  }, { passive: true });
+// Hide the dock the moment the user interacts with the remote desktop — a
+// mouse click or a touch, on any device. Capture phase is required: noVNC's
+// mouse handlers on the canvas call stopPropagation(), and on touch devices
+// the trackpad handler below stops touch events too, so a bubble-phase
+// listener would never run. Respects the pinned (auto-hide off) setting.
+function hideDockForCanvas() {
+  if (dockAutoHide && dock.classList.contains('visible')) hideDock();
+  // The app dock hides under the same rule (it keeps its own auto-hide
+  // state; a pinned dock stays put).
+  hideAppDock();
+}
+vncContainer.addEventListener('pointerdown', hideDockForCanvas, { capture: true });
+vncContainer.addEventListener('touchstart', hideDockForCanvas,
+  { capture: true, passive: true });
 
-  // Hide dock after tapping a dock button (app launched)
+// Hide dock after tapping a dock button (app launched) on touch devices
+if (isTouch) {
   dock.addEventListener('click', (e) => {
     if (e.target.closest('.dock-item')) {
       setTimeout(hideDock, 300);
@@ -294,17 +325,21 @@ if (isTouch) {
 applyAutoHide();
 
 // ── Dock magnification (desktop only) ──────────────────────
+//
+// The dock is a vertical strip, so proximity is measured along Y and each item
+// grows outward from its own vertical centre.
 
 if (!isTouch) {
   const MAG_RADIUS = 110;
   const MAG_MAX    = 1.4;
-  const dockItems  = dock.querySelectorAll('.dock-item');
 
   dock.addEventListener('mousemove', (e) => {
-    const mx = e.clientX;
-    for (const item of dockItems) {
+    const my = e.clientY;
+    // Live query, not a snapshot: the app dock's section is re-rendered as
+    // applications launch and close.
+    for (const item of dock.querySelectorAll('.dock-item')) {
       const rect = item.getBoundingClientRect();
-      const dist = Math.abs(mx - (rect.left + rect.width / 2));
+      const dist = Math.abs(my - (rect.top + rect.height / 2));
       const mag  = dist < MAG_RADIUS
         ? 1 + (MAG_MAX - 1) * (1 - dist / MAG_RADIUS)
         : 1;
@@ -414,10 +449,47 @@ function toggleMobileFullscreen() {
   }
 }
 
+// Chromium-only: while the page is in real fullscreen, the Keyboard Lock
+// API hands OS-reserved keys (Win, Alt+Tab, most browser shortcuts) to
+// the page instead of the host OS, so they reach noVNC and the remote.
+// No-op on Firefox/Safari (no API) and iOS (fullscreen is a CSS trick).
+// Escape stays special: the browser exits fullscreen only when Esc is
+// held ~3s, otherwise it is delivered to the page and forwarded.
+function applyKeyboardLock() {
+  if (!navigator.keyboard || !navigator.keyboard.lock) return;
+  if (document.fullscreenElement) {
+    navigator.keyboard.lock().catch(() => {});
+  } else if (navigator.keyboard.unlock) {
+    navigator.keyboard.unlock();
+  }
+}
+
 document.addEventListener('fullscreenchange', () => {
+  applyKeyboardLock();
   updateFullscreenBtn();
   if (!document.fullscreenElement) applyTopbar();
 });
+
+// Route F11 through toggleFullscreen instead of letting it reach the
+// remote. Chrome dispatches F11 as a cancellable keydown, so
+// preventDefault() stops the native fullscreen and ours (with keyboard
+// lock) takes over; under keyboard lock Chrome also hands F11 to the
+// page, which would otherwise leave it pressed on the remote. Firefox
+// never sends F11 to the page: its native fullscreen fires
+// fullscreenchange, and applyKeyboardLock() engages there anyway.
+// Capture phase + stopPropagation: noVNC listens on vncContainer below
+// document, so a bubble-phase handler would run too late to keep the
+// key from being forwarded.
+for (const type of ['keydown', 'keyup']) {
+  document.addEventListener(type, (e) => {
+    if (e.key === 'F11') {
+      e.preventDefault();
+      e.stopPropagation();
+      if (type === 'keydown') toggleFullscreen();
+    }
+  }, true);
+}
+
 document.addEventListener('webkitfullscreenchange', () => {
   updateFullscreenBtn();
   if (!document.webkitFullscreenElement) applyTopbar();
@@ -427,24 +499,14 @@ document.getElementById('topbar-theme').addEventListener('click', () => {
   setTheme(document.documentElement.getAttribute('data-theme') === 'dark' ? 'light' : 'dark');
 });
 
-// ── App launch helpers ──────────────────────────────────────
-
-async function launchApp(app) {
-  try {
-    await fetch('/api/desktop/launch', {
-      method: 'POST',
-      credentials: 'same-origin',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ app }),
-    });
-  } catch { /* silent */ }
-}
-
 // ── Server-side config (home dir, VNC endpoint, dock options) ───────────
 let SERVER_HOME = '/root';
 let SERVER_DESKTOP = '/root/Desktop';
 let SERVER_WS_URL = '';
 let CAN_RESTART = false;
+// 'pod' | 'session' | 'command' | 'off' — the server decides which restart
+// reaches this deployment's desktop, and 'session' is performed here.
+let RESTART_MODE = 'off';
 
 // Resolves once the server has told us how to reach VNC and what the dock
 // should offer. connect() awaits this before opening the WebSocket.
@@ -457,29 +519,17 @@ const serverConfigReady = (async () => {
       if (cfg.desktopDir) SERVER_DESKTOP = cfg.desktopDir;
       if (cfg.wsUrl) SERVER_WS_URL = cfg.wsUrl;
 
-      // Restarting the desktop needs a command from the deployment; without
-      // one the pod has no way to do it, so hide the button.
+      // The pod restarts itself when we run in a container, otherwise the
+      // deployment has to supply a command. Without either, hide the button.
       CAN_RESTART = Boolean(cfg.canRestart);
+      RESTART_MODE = cfg.restartMode || (CAN_RESTART ? 'pod' : 'off');
       const btnRestart = document.getElementById('btn-restart');
       if (btnRestart) btnRestart.hidden = !CAN_RESTART;
-
-      // Hide dock icons for apps this pod cannot launch
-      if (Array.isArray(cfg.canLaunch)) {
-        document.querySelectorAll('.dock-app').forEach((btn) => {
-          if (!cfg.canLaunch.includes(btn.dataset.app)) btn.hidden = true;
-        });
-      }
 
       if (!localStorage.getItem('upload-dest')) uploadDestInput.value = SERVER_DESKTOP;
     }
   } catch {}
 })();
-
-// ── Dock app icon clicks ────────────────────────────────────
-
-document.querySelectorAll('.dock-app').forEach((btn) => {
-  btn.addEventListener('click', () => launchApp(btn.dataset.app));
-});
 
 // ── Drag-and-drop uploads ───────────────────────────────────
 
@@ -546,6 +596,8 @@ autohideBtn.addEventListener('click', () => {
   localStorage.setItem('dock-autohide', dockAutoHide ? 'on' : 'off');
   autohideBtn.textContent = dockAutoHide ? 'On' : 'Off';
   applyAutoHide();
+  // The app dock follows the same setting.
+  setAppDockAutoHide(dockAutoHide);
 });
 
 const topbarBtn = document.getElementById('settings-topbar');
@@ -606,20 +658,53 @@ document.querySelectorAll('.res-btn').forEach((btn) => {
   });
 });
 
-// ── Send Ctrl+Alt+Del ───────────────────────────────────────
-
-document.getElementById('btn-keys').addEventListener('click', () => {
-  if (rfb) rfb.sendCtrlAltDel();
-});
-
 // ── Restart desktop ─────────────────────────────────────────
 
+// The restart takes the whole pod down, so the HTTP server and the VNC backend
+// disappear together and come back a variable time later (XFCE has to start
+// again). Poll /health until it answers, then reconnect: a fixed delay either
+// fires while the pod is still down or leaves the user on a dead screen.
+async function waitForServerBack() {
+  // Let the outgoing process actually go first, so an early /health cannot be
+  // answered by the instance that is on its way out.
+  await new Promise((r) => setTimeout(r, 2500));
+  for (let i = 0; i < 80; i++) {           // ~2 minutes at 1.5s intervals
+    try {
+      const r = await fetch(`/health?_=${Date.now()}`,
+        { cache: 'no-store', credentials: 'same-origin' });
+      if (r.ok) return true;
+    } catch { /* still restarting */ }
+    await new Promise((r) => setTimeout(r, 1500));
+  }
+  return false;
+}
+
 document.getElementById('btn-restart').addEventListener('click', async () => {
-  if (!confirm('Restart the desktop session? Unsaved work will be lost.')) return;
+  // A desktop in a container of its own is only reachable through the session
+  // it serves: the chord logs it out, start-vnc tears that container down and
+  // Kubernetes starts it again. The VNC disconnect that follows drives the
+  // normal reconnect loop, so this path only has to press the keys.
+  if (RESTART_MODE === 'session') {
+    if (!confirm('Restart the desktop? Unsaved work is lost.')) return;
+    if (!vncUp || !sendRestartShortcut(rfb)) {
+      showStatus('Not connected to the desktop — cannot restart it.');
+      return;
+    }
+    showStatus('Restarting desktop…');
+    return;
+  }
+
+  if (!confirm('Restart the desktop? The pod restarts and unsaved work is lost.')) return;
   showStatus('Restarting desktop…');
-  try { await fetch('/api/desktop/restart', { method: 'POST', credentials: 'same-origin' }); }
-  catch { /* continue */ }
-  setTimeout(connect, 4500);
+  try {
+    await fetch('/api/desktop/restart', { method: 'POST', credentials: 'same-origin' });
+  } catch { /* the server exits mid-response — that is the restart */ }
+  const back = await waitForServerBack();
+  if (back) {
+    connect();
+  } else {
+    showStatus('The desktop did not come back — reload the page to retry.');
+  }
 });
 
 // ── Window switcher ─────────────────────────────────────────
@@ -662,11 +747,26 @@ async function refreshWindowList() {
     windowListItems.innerHTML = data.windows.map(w => {
       const ico = windowIcon(w.title);
       const safeTitle = w.title.replace(/</g, '&lt;').replace(/>/g, '&gt;');
+      // Only the resolved app icon renders; the heuristic glyph is inserted
+      // if that image fails. It must not sit underneath the image — theme
+      // icons are transparent, so the glyph would show through.
+      const icon = w.appId
+        ? `<img src="${iconUrl(w.appId, 32)}" alt="" loading="lazy">`
+        : iconSvgs[ico];
       return `<button class="window-entry" data-wid="${w.id}">
-        <span class="window-entry-icon">${iconSvgs[ico]}</span>
+        <span class="window-entry-icon" data-fallback="${ico}">${icon}</span>
         <span class="window-entry-title">${safeTitle}</span>
       </button>`;
     }).join('');
+
+    // Failed icon loads fall back to the heuristic glyph.
+    windowListItems.querySelectorAll('.window-entry-icon img').forEach((img) => {
+      img.addEventListener('error', () => {
+        const wrap = img.parentElement;
+        img.remove();
+        wrap.innerHTML = iconSvgs[wrap.dataset.fallback] || iconSvgs.window;
+      });
+    });
 
     // Attach click handlers
     windowListItems.querySelectorAll('.window-entry').forEach(btn => {
@@ -685,23 +785,33 @@ async function refreshWindowList() {
   } catch { /* silent */ }
 }
 
-document.getElementById('btn-windows').addEventListener('click', (e) => {
-  e.stopPropagation();
-  const wasHidden = windowList.hidden;
-  windowList.hidden = !wasHidden;
-  if (wasHidden) refreshWindowList();
-});
-
 // Close window list on outside click
 document.addEventListener('click', (e) => {
-  if (!windowList.hidden && !windowList.contains(e.target) && e.target.id !== 'btn-windows') {
+  if (!windowList.hidden && !windowList.contains(e.target)) {
     windowList.hidden = true;
   }
 });
 
+// Canvas clicks are stopped by noVNC before they reach the listener above,
+// so the switcher also closes from the capture phase on the canvas itself.
+function closeWindowListForCanvas() {
+  if (!windowList.hidden) windowList.hidden = true;
+}
+vncContainer.addEventListener('pointerdown', closeWindowListForCanvas, { capture: true });
+vncContainer.addEventListener('touchstart', closeWindowListForCanvas,
+  { capture: true, passive: true });
+
+// ── App dock (bottom) ───────────────────────────────────────
+// The browser-side replacement for the Plank dock: pinned + running
+// applications on a bottom-edge dock, and the applications grid. The
+// appdock module owns its own polling, pins and menus; it only needs the
+// device flags and the stamped cache version for icon URLs.
+initAppDock({ isTouch, isMobile, cacheVersion: APP_VERSION });
+
 // ── Modal dismiss: backdrop click & Escape ──────────────────
 
-const allModals = [resolutionModal, settingsModal, uploadModal, dirModal, filebrowserModal];
+const allModals = [resolutionModal, settingsModal, uploadModal, dirModal, filebrowserModal,
+  document.getElementById('apps-modal')];
 
 allModals.forEach((modal) => {
   modal.addEventListener('click', (e) => { if (e.target === modal) modal.hidden = true; });
@@ -1491,6 +1601,15 @@ function autoFitResolution() {
     return Promise.resolve(null);
   }
 
+  // The soft keyboard is not a shape for the desktop to take, only something
+  // laid over it. Shrinking the remote to the strip left above it re-flows every
+  // window on the desktop each time the keyboard comes or goes, so the
+  // resolution is left exactly as it was and the client magnifies the region
+  // around the cursor instead -- see applyKeyboardZoom().
+  if (keyboard && keyboard.isOpen()) {
+    return Promise.resolve(null);
+  }
+
   // Measure the canvas, not the window: the topbar eats vertical space on
   // desktop, and on iOS --real-vh differs from window.innerHeight. Either way
   // the window is not the box the desktop is drawn into.
@@ -1540,10 +1659,20 @@ window.addEventListener('orientationchange', () => setTimeout(scheduleAutoFit, 3
 
 if (isTouch) {
   const mobileToolbar = document.getElementById('mobile-toolbar');
-  const touchCursor   = document.getElementById('touch-cursor');
 
+  // ── Local zoom ──
+  // The magnified view is held as a window into the remote screen: the window's
+  // top-left corner in container coordinates, plus a scale factor. It is drawn
+  // with a CSS transform on the *canvas* rather than on the screen element it
+  // sits in, because noVNC measures that element to work out its own fit: a
+  // transformed box reads as a larger viewport, and the next resize would then
+  // fit the canvas to the magnified size on top of the transform.
   let vncZoom = 1;
-  let panX = 0.5, panY = 0.5;
+  let viewX = 0, viewY = 0;
+  // Lowest container y still visible above the soft keyboard and the
+  // special-keys bar floating on it. 0 while the keyboard is down, when the
+  // whole container is visible.
+  let safeBottom = 0;
 
   // ── Virtual cursor state (trackpad mode) ──
   let cursorX = window.innerWidth / 2;
@@ -1572,11 +1701,36 @@ if (isTouch) {
   const DBL_CLICK_GAP_MS = 80;   // pause between the two clicks of a double-click
 
   mobileToolbar.hidden = false;
-  touchCursor.hidden = false; // Always visible in trackpad mode
+
+  // ── Remote cursor image ──
+  // On touch devices noVNC cannot set a CSS cursor, so it requests the RFB
+  // cursor pseudo-encoding and paints whatever shape the desktop sends -- arrow,
+  // I-beam, hand, resize grip -- onto a fixed canvas it appends to <body>. That
+  // image is the mobile pointer, and because the shape comes from the remote it
+  // changes with the element underneath on its own. It is also the only pointer
+  // on screen: the client used to draw its own arrow/crosshair on top, which
+  // just read as a duplicated cursor.
+  //
+  // noVNC anchors the image itself, which is right at 1:1 but drifts once the
+  // canvas carries the magnifying transform: what it is fed is the canvas-space
+  // coordinate its framebuffer maths needs, not the visual position. So learn
+  // the hot spot from noVNC's own placement and re-anchor the image on the
+  // tracked point. Re-anchoring from updateCursorPos() rather than only right
+  // after a send also keeps the pointer under the cursor when the view zooms or
+  // pans beneath it.
+  let cursorHotX = NaN, cursorHotY = NaN;
+
+  // The framebuffer canvas lives inside #vnc-container, so the body-level canvas
+  // noVNC creates is the cursor image.
+  function remoteCursorEl() {
+    return document.querySelector('body > canvas');
+  }
 
   function updateCursorPos() {
-    touchCursor.style.left = cursorX + 'px';
-    touchCursor.style.top  = cursorY + 'px';
+    const el = remoteCursorEl();
+    if (!el || !isFinite(cursorHotX)) return;
+    el.style.left = (cursorX - cursorHotX) + 'px';
+    el.style.top  = (cursorY - cursorHotY) + 'px';
   }
   updateCursorPos();
 
@@ -1594,12 +1748,39 @@ if (isTouch) {
   function sendMouse(type, button, buttons, x = cursorX, y = cursorY) {
     const canvas = getCanvas();
     if (!canvas) return;
+    // noVNC reads a mouse position with clientToElement() against the canvas's
+    // *rendered* box, then divides by its own scale, which knows nothing about
+    // the magnifying transform. Feed it the position that point has in the
+    // canvas's unscaled box instead, so the framebuffer coordinate it derives
+    // is the one actually under the cursor. At 1:1 this is the identity.
+    const r = canvas.getBoundingClientRect();
+    const c = contentPoint(x, y);
+    const offX = canvas.offsetLeft, offY = canvas.offsetTop;
+    // MouseEvent coordinates are integers, so round once here and use the same
+    // numbers both for the event and for the hot-spot read-back below.
+    const sentX = Math.round(r.left + c.x - offX);
+    const sentY = Math.round(r.top + c.y - offY);
     canvas.dispatchEvent(new MouseEvent(type, {
-      clientX: x, clientY: y,
+      clientX: sentX,
+      clientY: sentY,
       screenX: x, screenY: y,
       button, buttons,
       bubbles: true, cancelable: true, view: window,
     }));
+    // A mousemove is what makes noVNC redraw its cursor image, so this is the
+    // moment to read back where it put it and work out the hot spot: the image
+    // lands at (sentX - hotX), so the hot spot is the difference. Then put it
+    // back on the tracked point; see updateCursorPos().
+    if (type === 'mousemove') {
+      const el = remoteCursorEl();
+      const left = el ? parseFloat(el.style.left) : NaN;
+      const top  = el ? parseFloat(el.style.top)  : NaN;
+      if (isFinite(left) && isFinite(top)) {
+        cursorHotX = sentX - left;
+        cursorHotY = sentY - top;
+        updateCursorPos();
+      }
+    }
   }
 
   // Move virtual cursor and send mousemove to VNC
@@ -1608,6 +1789,7 @@ if (isTouch) {
     cursorY = Math.max(0, Math.min(window.innerHeight, y));
     updateCursorPos();
     sendMouse('mousemove', 0, isDragging ? 1 : 0);
+    followCursor();
   }
 
   // Click at a position (default: current cursor position)
@@ -1662,20 +1844,199 @@ if (isTouch) {
   }
 
   // ── Zoom ──
+  // The view model: a container point c is drawn at zoom * (c - view). The
+  // canvas keeps its own layout size and offset -- noVNC owns those -- so the
+  // transform has to fold its offset back in for `view` to mean container
+  // coordinates: with origin at the canvas's own corner, a canvas point p lands
+  // at offset + zoom * p + translate, and that has to equal zoom * (offset + p
+  // - view).
+  const MIN_ZOOM = 1;
+  const MAX_ZOOM = 3;
+
+  function clampView() {
+    const canvas = getCanvas();
+    if (!canvas) return;
+    const offX = canvas.offsetLeft, offY = canvas.offsetTop;
+    // The exact layout size, not clientWidth/clientHeight: those are rounded to
+    // whole pixels, which at a zoom picked to fit the width exactly would leave
+    // a sliver of margin down one edge.
+    const cw = parseFloat(canvas.style.width) || canvas.clientWidth;
+    const ch = parseFloat(canvas.style.height) || canvas.clientHeight;
+    const winW = vncContainer.clientWidth / vncZoom;
+    // Only the strip above the keyboard has to stay filled: everything below it
+    // is covered, so blank space there is never seen.
+    const strip = safeBottom > 0 ? Math.min(safeBottom, vncContainer.clientHeight)
+                                 : vncContainer.clientHeight;
+    const winH = strip / vncZoom;
+    // A window wider than the canvas is centred on it rather than pinned to an
+    // edge, which is what the un-zoomed letterboxing looks like.
+    const spanX = cw - winW;
+    const spanY = ch - winH;
+    viewX = spanX <= 0 ? offX + spanX / 2 : Math.max(offX, Math.min(offX + spanX, viewX));
+    viewY = spanY <= 0 ? offY + spanY / 2 : Math.max(offY, Math.min(offY + spanY, viewY));
+  }
+
   function applyVncZoom() {
-    const screen = vncContainer.firstElementChild;
-    if (!screen) return;
+    const canvas = getCanvas();
+    if (!canvas) return;
     if (vncZoom > 1) {
-      screen.style.transformOrigin = `${panX * 100}% ${panY * 100}%`;
-      screen.style.transform = `scale(${vncZoom})`;
+      clampView();
+      const offX = canvas.offsetLeft, offY = canvas.offsetTop;
+      const tx = (vncZoom - 1) * offX - vncZoom * viewX;
+      const ty = (vncZoom - 1) * offY - vncZoom * viewY;
+      canvas.style.transformOrigin = '0 0';
+      canvas.style.transform = `translate(${tx}px, ${ty}px) scale(${vncZoom})`;
     } else {
-      screen.style.transform = '';
-      screen.style.transformOrigin = '';
-      panX = 0.5; panY = 0.5;
+      canvas.style.transform = '';
+      canvas.style.transformOrigin = '';
+      viewX = 0;
+      viewY = 0;
     }
   }
 
+  // Container coordinates of the remote screen point drawn under (x, y); the
+  // inverse of the mapping applyVncZoom draws.
+  function contentPoint(x, y) {
+    const r = vncContainer.getBoundingClientRect();
+    return { x: viewX + (x - r.left) / vncZoom,
+             y: viewY + (y - r.top) / vncZoom };
+  }
+
+  // noVNC's own scale: how many CSS pixels one remote pixel takes up. Read from
+  // the style width rather than clientWidth, which is rounded.
+  function canvasFit(canvas) {
+    if (!canvas || !canvas.width) return 1;
+    const css = parseFloat(canvas.style.width) || canvas.clientWidth;
+    return css > 0 ? css / canvas.width : 1;
+  }
+
+  // Remote-screen coordinate under the virtual cursor. The crosshair is what
+  // drives the remote pointer, so this is derived from it -- but it is the
+  // thing that has to stay put whenever the view changes underneath for a
+  // reason that is not the user moving the crosshair.
+  function cursorFramebuffer() {
+    const canvas = getCanvas();
+    if (!canvas || !canvas.width) return null;
+    const fit = canvasFit(canvas);
+    const c = contentPoint(cursorX, cursorY);
+    return { x: (c.x - canvas.offsetLeft) / fit, y: (c.y - canvas.offsetTop) / fit };
+  }
+
+  function placeCursorAtFramebuffer(fb) {
+    const canvas = getCanvas();
+    if (!canvas || !fb) return;
+    const fit = canvasFit(canvas);
+    placeCursorAt({ x: canvas.offsetLeft + fb.x * fit,
+                    y: canvas.offsetTop + fb.y * fit });
+  }
+
+  // Draw container point `content` at (tx, ty), and bring the virtual cursor
+  // along with it: the crosshair has to keep marking the same remote spot, or
+  // the next click would land somewhere else than what it looks like it is on.
+  function parkContentAt(content, tx, ty) {
+    vncZoom = Math.max(MIN_ZOOM, Math.min(MAX_ZOOM, vncZoom));
+    viewX = content.x - tx / vncZoom;
+    viewY = content.y - ty / vncZoom;
+    applyVncZoom();
+    placeCursorAt(content);
+  }
+
+  function placeCursorAt(content) {
+    const r = vncContainer.getBoundingClientRect();
+    cursorX = r.left + vncZoom * (content.x - viewX);
+    cursorY = r.top + vncZoom * (content.y - viewY);
+    updateCursorPos();
+  }
+
+  // Zoom about a container point, keeping whatever is drawn under it in place.
+  function zoomAbout(cx, cy, next) {
+    next = Math.max(MIN_ZOOM, Math.min(MAX_ZOOM, next));
+    if (next === vncZoom) return;
+    viewX += cx / vncZoom - cx / next;
+    viewY += cy / vncZoom - cy / next;
+    vncZoom = next;
+  }
+
+  // ── Soft keyboard: magnify locally instead of reshaping the desktop ──
+  // With the keyboard up the remote resolution stays exactly what it was -- see
+  // autoFitResolution(). The desktop is not made smaller to fit the strip that
+  // is left; instead the client magnifies the region around the virtual cursor
+  // and slides it into that strip, so the field being typed into stays in view
+  // and legible.
+  const CURSOR_KEEP_PX = 24;   // how close to the bar the cursor may get
+  let viewBeforeKeyboard = null;
+  // Remote point under the cursor when the keyboard was summoned; see onWillOpen.
+  let fieldBeforeKeyboard = null;
+
+  function applyKeyboardZoom(fieldFb) {
+    const cRect = vncContainer.getBoundingClientRect();
+    safeBottom = Math.max(0, Math.min(cRect.height, keyboard.visibleBottom() - cRect.top));
+    const canvas = getCanvas();
+    // Magnify only as far as the page width allows. The whole width of the
+    // desktop has to stay on screen, or a line of text being typed runs off the
+    // edge -- so the scale to aim for is whatever puts the remote's full width
+    // across the page, edge to edge. That is still much larger than noVNC's fit
+    // wherever the fit is limited by height (Android, whose shorter viewport
+    // leaves the desktop letterboxed), and it is ~1 where the fit is already
+    // limited by width (iOS, which the keyboard does not shrink).
+    const fit = canvasFit(canvas);
+    const fullWidth = canvas && canvas.width ? vncContainer.clientWidth / canvas.width : fit;
+    vncZoom = Math.max(MIN_ZOOM, Math.min(MAX_ZOOM, fit > 0 ? fullWidth / fit : 1));
+    // Android shrank the viewport for the keyboard on the way in and noVNC
+    // re-fitted the desktop into what was left, which moved the desktop out from
+    // under the cursor. Put the cursor back on the remote point it was on before
+    // that -- the field being typed into -- so the magnified view is centred on
+    // it rather than on wherever the re-fit left it.
+    if (fieldFb) placeCursorAtFramebuffer(fieldFb);
+    const content = contentPoint(cursorX, cursorY);
+    // Same column, middle of the strip: the field ends up under the eye, with
+    // as much of what surrounds it visible as the strip allows.
+    parkContentAt(content, cursorX - cRect.left, safeBottom / 2);
+  }
+
+  function restoreAfterKeyboard() {
+    safeBottom = 0;
+    const fb = cursorFramebuffer();
+    if (viewBeforeKeyboard) {
+      vncZoom = viewBeforeKeyboard.zoom;
+      viewX = viewBeforeKeyboard.x;
+      viewY = viewBeforeKeyboard.y;
+      viewBeforeKeyboard = null;
+      applyVncZoom();
+    }
+    // noVNC measures its fit from the screen element and skips the whole update
+    // when the client size matches the one it recorded at connect -- which is
+    // exactly what the keyboard closing looks like, since the viewport comes
+    // back to the size it had. Ask it to measure again, or the canvas is left
+    // scaled for the strip it no longer has. Re-assigning the property it
+    // already has is the public way to do that.
+    if (rfb) rfb.scaleViewport = true;
+    // The desktop has just been re-fitted around the cursor, so put the cursor
+    // back on the remote point it was pointing at.
+    if (fb) placeCursorAtFramebuffer(fb);
+  }
+
+  // Trackpad movement while the keyboard is up: the remote cursor follows the
+  // crosshair, so a crosshair that slips under the keyboard would hide the very
+  // thing being typed into. Recentring only once it reaches the bar leaves
+  // ordinary movement, and any manual pan, alone.
+  function followCursor() {
+    if (safeBottom <= 0) return;
+    const canvas = getCanvas();
+    if (!canvas) return;
+    const r = vncContainer.getBoundingClientRect();
+    if (cursorY - r.top <= safeBottom - CURSOR_KEEP_PX) return;
+    const content = contentPoint(cursorX, cursorY);
+    parkContentAt(content, cursorX - r.left, safeBottom / 2);
+  }
+
   document.getElementById('mob-zoom-fit').addEventListener('click', () => {
+    // While the keyboard is up, "fit" means the magnified strip view, not the
+    // whole desktop: the remote must not be reshaped for the keyboard.
+    if (keyboard && keyboard.isOpen()) {
+      applyKeyboardZoom();
+      return;
+    }
     vncZoom = 1;
     applyVncZoom();
     autoFitResolution();
@@ -1713,12 +2074,11 @@ if (isTouch) {
     return { x: (t0.clientX + t1.clientX) / 2, y: (t0.clientY + t1.clientY) / 2 };
   }
 
-  // Pan the magnified view so the point between the fingers follows them.
+  // Pan the magnified view so the point between the fingers follows them: the
+  // content moves with the fingers, so the window moves against them.
   function panBy(dx, dy) {
-    const cw = vncContainer.clientWidth;
-    const ch = vncContainer.clientHeight;
-    panX = Math.max(0, Math.min(1, panX - dx / (cw * Math.max(0.01, vncZoom - 1))));
-    panY = Math.max(0, Math.min(1, panY - dy / (ch * Math.max(0.01, vncZoom - 1))));
+    viewX -= dx / vncZoom;
+    viewY -= dy / vncZoom;
   }
 
   // ═══ TRACKPAD TOUCH HANDLING ═══
@@ -1821,7 +2181,11 @@ if (isTouch) {
 
       if (gestureMode === 'pinch') {
         if (lastDist > 0) {
-          vncZoom = Math.max(1, Math.min(3, vncZoom * (dist / lastDist)));
+          // Zoom about the point between the fingers, so what is under them
+          // stays under them.
+          const r = vncContainer.getBoundingClientRect();
+          zoomAbout(center.x - r.left, center.y - r.top,
+                    vncZoom * (dist / lastDist));
         }
         if (vncZoom > 1) panBy(center.x - lastCenter.x, center.y - lastCenter.y);
         applyVncZoom();
@@ -1968,12 +2332,26 @@ if (isTouch) {
   // mobile-keyboard.js for why.
   keyboard = createMobileKeyboard({
     getRfb: () => rfb,
+    // The remote point the cursor is on when the keyboard is summoned: on
+    // Android the viewport shrinks for it and noVNC re-fits the desktop, so by
+    // the time the keyboard has settled the cursor is over something else. This
+    // is the field being typed into, and what the magnified view centres on.
+    onWillOpen: () => { fieldBeforeKeyboard = cursorFramebuffer(); },
     onOpenChange: (isOpen) => {
-      // Fires once the keyboard has finished animating, in both directions:
-      // refit to the strip left above it while it is up, and back to the full
-      // viewport once it is gone. (On close this only happens after the
-      // viewport has finished growing back, so the refit cannot be measured
-      // against a size that is still moving.)
+      // Fires once the keyboard has finished animating, in both directions.
+      // Opening: remember the view and magnify around the cursor, so the field
+      // being typed into is not hidden behind the keyboard + special-keys bar.
+      // Closing: put the view back the way it was, then let the desktop refit
+      // to the viewport that has grown back.
+      if (isOpen) {
+        if (!viewBeforeKeyboard) {
+          viewBeforeKeyboard = { zoom: vncZoom, x: viewX, y: viewY };
+        }
+        applyKeyboardZoom(fieldBeforeKeyboard);
+        return;
+      }
+      fieldBeforeKeyboard = null;
+      restoreAfterKeyboard();
       scheduleAutoFit();
     },
   });

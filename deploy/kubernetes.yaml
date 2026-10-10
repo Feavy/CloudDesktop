@@ -80,12 +80,16 @@ spec:
             # --- X display used for xrandr / xclip / wmctrl ------------
             - name: DISPLAY
               value: ":1"
-            # Optional: shell command the dock's "Restart Desktop" button runs.
-            # Leave unset and the button stays hidden. Only valid when the
-            # client shares a container with the VNC server; sudo is
-            # available passwordless in clouddesktop-desktop and -full.
-            # - name: RESTART_CMD
-            #   value: "sudo pkill -USR1 Xtigervnc"
+            # The dock's "Restart Desktop" button needs no configuration here.
+            # With the desktop in a container of its own (the setup this file
+            # assumes) the browser ends the session over VNC by pressing the
+            # shortcut start-vnc's image binds to xfce4-session-logout --logout,
+            # and Kubernetes restarts the desktop container. The web client
+            # stays up and reconnects. If the desktop is third-party and does
+            # not bind that chord, point it at Ctrl+Alt+Shift+R, or set
+            # RESTART_MODE=command / off to change or hide the action.
+            # - name: RESTART_MODE
+            #   value: "session"
           securityContext:
             allowPrivilegeEscalation: false
             readOnlyRootFilesystem: true

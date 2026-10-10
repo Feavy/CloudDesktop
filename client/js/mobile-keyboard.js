@@ -64,7 +64,10 @@ const SPECIAL_KEYS = [
   { label: 'Shift', keysym: 0xFFE1, code: 'ShiftLeft',   sticky: true },
 ];
 
-export function createMobileKeyboard({ getRfb, onOpenChange }) {
+// Finger travel beyond which a press on the bar is a slide, not a tap.
+const SLIDE_SLOP_PX = 10;
+
+export function createMobileKeyboard({ getRfb, onOpenChange, onWillOpen }) {
   let input = null;
   let open = false;
 
@@ -196,27 +199,48 @@ export function createMobileKeyboard({ getRfb, onOpenChange }) {
     for (const def of SPECIAL_KEYS) {
       const btn = document.createElement('button');
       btn.type = 'button';
-      btn.className = 'kb-special-key';
+      btn.className = 'kb-special-key' + (def.sticky ? ' sticky' : '');
       btn.textContent = def.label;
       btn.dataset.code = def.code;
       bar.appendChild(btn);
     }
+    // A press only becomes a key once it has proven to be a tap: pointerdown
+    // arms it (visual feedback via .pressed), and the key is sent on a clean
+    // pointerup. Dragging the strip therefore never presses the key it
+    // started on: a horizontal drag is a scroll (touch-action:pan-x), which
+    // surfaces as pointercancel, and a drag on an unscrollable strip is
+    // caught by the slop check on pointermove. Pending presses are tracked
+    // per pointer id, so two simultaneous fingers hold two independent keys.
     // preventDefault on pointerdown keeps focus on the off-screen input: a tap
     // that moved focus would blur it and dismiss the soft keyboard mid-use.
-    // Scrolling the strip survives that -- touch-action:pan-x in the CSS
-    // governs it, not this handler.
+    const pending = new Map(); // pointerId -> { btn, x, y }
     bar.addEventListener('pointerdown', (e) => {
       e.preventDefault();
       const btn = e.target.closest('.kb-special-key');
       if (!btn) return;
       btn.classList.add('pressed');
-      pressSpecialKey(btn.dataset.code);
+      pending.set(e.pointerId, { btn, x: e.clientX, y: e.clientY });
+    });
+    bar.addEventListener('pointermove', (e) => {
+      const p = pending.get(e.pointerId);
+      if (!p) return;
+      if (Math.hypot(e.clientX - p.x, e.clientY - p.y) > SLIDE_SLOP_PX) {
+        // Sliding, not tapping: give up on the key and drop the feedback.
+        p.btn.classList.remove('pressed');
+        pending.delete(e.pointerId);
+      }
     });
     // Touch pointers are implicitly captured, so these land on the button the
     // press started on even if the finger has moved off it.
-    const unpress = (e) => e.target.closest?.('.kb-special-key')?.classList.remove('pressed');
-    bar.addEventListener('pointerup', unpress);
-    bar.addEventListener('pointercancel', unpress);
+    const finishPress = (e) => {
+      const p = pending.get(e.pointerId);
+      if (!p) return;
+      pending.delete(e.pointerId);
+      p.btn.classList.remove('pressed');
+      if (e.type === 'pointerup') pressSpecialKey(p.btn.dataset.code);
+    };
+    bar.addEventListener('pointerup', finishPress);
+    bar.addEventListener('pointercancel', finishPress);
     // Long-pressing a key must not raise the text-selection callout.
     bar.addEventListener('contextmenu', (e) => e.preventDefault());
     document.body.appendChild(bar);
@@ -302,6 +326,18 @@ export function createMobileKeyboard({ getRfb, onOpenChange }) {
     const vv = window.visualViewport;
     if (!vv) return;
     bar.style.top = `${vv.offsetTop + vv.height}px`;
+  }
+
+  // Lowest y, in viewport coordinates, that is still visible once the keyboard
+  // is up: the top edge of the special-keys bar, which is parked immediately
+  // above the keyboard and therefore covers the last of the strip. The bar is
+  // what a caller has to clear, not the keyboard, or the keys would sit on top
+  // of whatever it laid out there. Without the bar (or without a visual
+  // viewport to measure) the keyboard's own top edge is the answer.
+  function visibleBottom() {
+    if (bar && !bar.hidden) return bar.getBoundingClientRect().top;
+    const vv = window.visualViewport;
+    return vv ? vv.offsetTop + vv.height : window.innerHeight;
   }
 
   function onKeyDown(e) {
@@ -508,6 +544,11 @@ export function createMobileKeyboard({ getRfb, onOpenChange }) {
 
   function openKeyboard() {
     cancelSettle();
+    // Told before the OS keyboard is summoned and before anything about the
+    // viewport moves: on Android the layout viewport shrinks the moment it
+    // appears, and the caller has to note anything that depends on the height it
+    // is about to lose.
+    onWillOpen?.();
     // A reconnect mid-press replaces the RFB object; anything remembered from
     // the old session must not be released into the new one.
     held.clear();
@@ -579,6 +620,9 @@ export function createMobileKeyboard({ getRfb, onOpenChange }) {
     // settled -- up (strip above the keyboard) or down (full viewport) --
     // fitting is the caller's job and this says go ahead.
     blocksResize: () => !!openWatch || !!settle,
+    // Lowest y still visible above the keyboard and the special-keys bar; see
+    // visibleBottom above.
+    visibleBottom,
     open: openKeyboard,
     close: closeKeyboard,
     toggle: () => (open ? closeKeyboard() : openKeyboard()),

@@ -18,20 +18,47 @@ ENV DEBIAN_FRONTEND=noninteractive \
 # HOME is not set here on purpose: start-vnc derives it from the passwd entry,
 # so DESKTOP_USER stays the single place that decides which user we run as.
 
+# Space-separated extra locales to bake into the image, e.g. build with
+# --build-arg EXTRA_LOCALES="fr_FR.UTF-8 de_DE.UTF-8". Only en_US.UTF-8 is
+# generated otherwise; start-vnc also generates a missing locale on the fly
+# when LANG/LC_ALL names one, so this is an optimization rather than a
+# requirement.
+ARG EXTRA_LOCALES=
+
+# The unprivileged user install.sh creates (or reuses) and that the desktop runs
+# as. Exported so the persistent-root entrypoint can drop back to it after its
+# root-only pivot_root; see deploy/pivot-root.sh.
+ARG DESKTOP_USER=ubuntu
+
 # INSTALL_NODE=0 because the desktop does not need a JS runtime. Everything
 # else -- including the xclip/wmctrl/xrandr/cvt tooling the web client shells
 # out to -- is installed, so this image works unchanged if you later decide to
 # run the client inside it.
 COPY install.sh /tmp/install.sh
-RUN INSTALL_NODE=0 bash /tmp/install.sh && rm -f /tmp/install.sh
+RUN INSTALL_NODE=0 DESKTOP_USER="${DESKTOP_USER}" EXTRA_LOCALES="${EXTRA_LOCALES}" \
+    bash /tmp/install.sh && rm -f /tmp/install.sh
+
+ENV DESKTOP_USER=${DESKTOP_USER}
 
 # 6900 = websockify (the browser-facing port)
 EXPOSE 6900
 
 # Probes the websockify port rather than just the binary's existence, so a
-# container that has crashed X but is still running reports unhealthy.
-HEALTHCHECK --interval=30s --timeout=3s --start-period=20s --retries=3 \
+# container that has crashed X but is still running reports unhealthy. The
+# start period leaves room for start-vnc's startup work on a fresh container,
+# chiefly generating the session locale when LANG/LC_ALL names one that is not
+# baked in.
+HEALTHCHECK --interval=30s --timeout=3s --start-period=120s --retries=3 \
   CMD bash -c 'exec 3<>/dev/tcp/127.0.0.1/${VNC_WS_PORT:-6900}' || exit 1
+
+# Optional persistent root filesystem. With PERSISTENT_ROOT_DIR set, this
+# wrapper pivot_roots into that directory (seeding it from this image the first
+# time) before tini runs, so packages, $HOME and the session survive restarts.
+# The pod must then run as root (runAsUser: 0) with SYS_ADMIN and friends; if it
+# does not, the wrapper explains exactly what is missing and exits. With
+# PERSISTENT_ROOT_DIR unset it is a pass-through to tini, exactly as before.
+COPY deploy/pivot-root.sh /usr/local/bin/pivot-root
+RUN chmod +x /usr/local/bin/pivot-root
 
 # Unprivileged. install.sh reuses the image's stock `ubuntu` user by default and
 # gave it a writable $HOME for .Xauthority, ~/.vnc and D-Bus sockets;
@@ -40,5 +67,5 @@ HEALTHCHECK --interval=30s --timeout=3s --start-period=20s --retries=3 \
 USER ubuntu
 
 # tini reaps the X, dbus and websockify children that start-desktop forks
-ENTRYPOINT ["/usr/bin/tini", "--"]
-CMD ["/usr/local/bin/start-desktop"]
+ENTRYPOINT ["/usr/local/bin/pivot-root"]
+CMD ["/usr/bin/tini", "--", "/usr/local/bin/start-desktop"]

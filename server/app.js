@@ -5,6 +5,7 @@ const express = require('express');
 const helmet = require('helmet');
 const config = require('./config');
 const desktopRoutes = require('./routes/desktop');
+const appRoutes = require('./routes/apps');
 const { createVncWss } = require('./ws-proxy');
 
 const app = express();
@@ -33,6 +34,9 @@ app.set('trust proxy', 1);
 // No authentication here: the pod is fronted by Traefik with a forwardAuth
 // middleware, so every request reaching this process is already authorised.
 app.use('/api/desktop', desktopRoutes);
+// The app dock's own API. Mounted after the desktop router, whose routes
+// are all exact paths, so nothing collides.
+app.use('/api/desktop/apps', appRoutes);
 
 // Cache policy
 // ------------
