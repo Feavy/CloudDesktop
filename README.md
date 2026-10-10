@@ -276,7 +276,7 @@ survive a restart.
 
 By default everything the desktop writes goes to the container's writable layer,
 so a restart — or an image upgrade — starts from the image again. Set
-`PERSISTENT_ROOT_DIR` to a mounted volume and the image copies its own root
+`ROOT_PERSIST_DIR` to a mounted volume and the image copies its own root
 filesystem into that volume once, then `pivot_root(2)`s into the copy before
 starting `tini`. Packages, `$HOME`, the XFCE session and everything else then
 live on the volume instead of the container layer:
@@ -286,7 +286,7 @@ containers:
   - name: desktop
     image: ghcr.io/feavy/clouddesktop-full:latest
     env:
-      - name: PERSISTENT_ROOT_DIR
+      - name: ROOT_PERSIST_DIR
         value: /persist
     securityContext:
       # Required: the images run unprivileged on purpose, and these are what
@@ -312,13 +312,13 @@ How it behaves:
 
 - The first start **seeds** the volume with a copy of the image's root
   filesystem (`tar --one-file-system`, so the volume itself and kubelet's other
-  mounts are skipped) and creates `<PERSISTENT_ROOT_DIR>/.seeded` when it is
+  mounts are skipped) and creates `<ROOT_PERSIST_DIR>/.seeded` when it is
   done. Delete that marker to seed again; a re-seed overwrites the image's files
   but does not delete files you added yourself.
 - On every start it remounts what the runtime provides inside the new root:
   `/etc/hosts`, `/etc/resolv.conf`, `/etc/hostname`, the projected service
   account token, plus `/proc`, `/sys`, `/dev` and fresh `tmpfs` mounts on `/tmp`
-  and `/run`. Any **other** volume mounted outside `PERSISTENT_ROOT_DIR` is not
+  and `/run`. Any **other** volume mounted outside `ROOT_PERSIST_DIR` is not
   visible after the pivot, so mount what you need inside it.
 - The pivot needs root, so the wrapper calls `setpriv` to drop back to
   `DESKTOP_USER` (`ubuntu` by default) afterwards — the desktop itself still
@@ -329,7 +329,7 @@ How it behaves:
   and exits, rather than starting a desktop that silently is not persistent.
 
 This is implemented by `deploy/pivot-root.sh`, which is the ENTRYPOINT of both
-desktop images. With `PERSISTENT_ROOT_DIR` unset it is a pass-through to `tini`,
+desktop images. With `ROOT_PERSIST_DIR` unset it is a pass-through to `tini`,
 so nothing changes for the default deployment. `clouddesktop-client` has no
 desktop and is unaffected.
 
@@ -412,7 +412,7 @@ All settings are environment variables.
 | `HOME` | passwd entry | Base for `~/Desktop` and `~/Downloads` |
 | `RESTART_CMD` | *(unset)* | Restart command used when there is no container to restart (a dev checkout) |
 | `RESTART_MODE` | `auto` | Force how the dock restarts: `auto`, `pod`, `session`, `command` or `off` |
-| `PERSISTENT_ROOT_DIR` | *(unset)* | Mounted volume to `pivot_root` into at startup, so the whole root filesystem persists; see [Persistent root filesystem](#persistent-root-filesystem) |
+| `ROOT_PERSIST_DIR` | *(unset)* | Mounted volume to `pivot_root` into at startup, so the whole root filesystem persists; see [Persistent root filesystem](#persistent-root-filesystem) |
 | `PERSISTENT_ROOT_USER` | `DESKTOP_USER` (`ubuntu`) | User the entrypoint drops back to after the pivot; `root` to stay root on purpose |
 | `DESKTOP_USER` | `ubuntu` | Unprivileged user the desktop runs as, also the default `PERSISTENT_ROOT_USER` |
 

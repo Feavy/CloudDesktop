@@ -51,12 +51,12 @@ EXPOSE 6900
 HEALTHCHECK --interval=30s --timeout=3s --start-period=120s --retries=3 \
   CMD bash -c 'exec 3<>/dev/tcp/127.0.0.1/${VNC_WS_PORT:-6900}' || exit 1
 
-# Optional persistent root filesystem. With PERSISTENT_ROOT_DIR set, this
+# Optional persistent root filesystem. With ROOT_PERSIST_DIR set, this
 # wrapper pivot_roots into that directory (seeding it from this image the first
 # time) before tini runs, so packages, $HOME and the session survive restarts.
 # The pod must then run as root (runAsUser: 0) with SYS_ADMIN and friends; if it
 # does not, the wrapper explains exactly what is missing and exits. With
-# PERSISTENT_ROOT_DIR unset it is a pass-through to tini, exactly as before.
+# ROOT_PERSIST_DIR unset it is a pass-through to tini, exactly as before.
 COPY deploy/pivot-root.sh /usr/local/bin/pivot-root
 RUN chmod +x /usr/local/bin/pivot-root
 

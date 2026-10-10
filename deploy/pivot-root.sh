@@ -2,11 +2,11 @@
 # ============================================================================
 #  Persistent-root entrypoint for the desktop images.
 #
-#  With PERSISTENT_ROOT_DIR unset (the default) this is a pure pass-through:
+#  With ROOT_PERSIST_DIR unset (the default) this is a pure pass-through:
 #  the command it is given -- "/usr/bin/tini -- <the image's entrypoint>" --
 #  starts exactly as it did before this script existed.
 #
-#  With PERSISTENT_ROOT_DIR=/some/volume it copies the image's root filesystem
+#  With ROOT_PERSIST_DIR=/some/volume it copies the image's root filesystem
 #  into that directory once, remounts the runtime filesystems kubelet hands the
 #  container (/etc/hosts, /etc/resolv.conf, /etc/hostname, the service account
 #  token, /proc, /sys, /dev and a tmpfs on /tmp and /run), calls pivot_root(2)
@@ -24,7 +24,7 @@ set -Eeuo pipefail
 
 # Where the persistent root lives, and the command to run once we are in it
 # (e.g. "tini -- start-desktop").
-TARGET="${PERSISTENT_ROOT_DIR:-}"
+TARGET="${ROOT_PERSIST_DIR:-}"
 
 # The user to run the desktop as. The desktop images must not run as root
 # (Xtigervnc and XFCE both misbehave and leave root-owned files behind), so once
@@ -34,7 +34,7 @@ DROP_USER="${PERSISTENT_ROOT_USER:-${DESKTOP_USER:-ubuntu}}"
 print_pivot_requirements() {
     cat >&2 <<EOF
 
-  PERSISTENT_ROOT_DIR needs a privileged container. Add this to the pod spec of
+  ROOT_PERSIST_DIR needs a privileged container. Add this to the pod spec of
   this container:
 
     securityContext:
@@ -54,7 +54,7 @@ print_pivot_requirements() {
   clusters that use user namespaces.
 
   Also check that:
-    * PERSISTENT_ROOT_DIR is an absolute path to a writable directory,
+    * ROOT_PERSIST_DIR is an absolute path to a writable directory,
     * a volume is mounted there -- otherwise the root is not persistent,
     * the volume has room for a copy of the image's root filesystem,
     * no volume is mounted anywhere else: mounts under the old root are gone
@@ -75,7 +75,7 @@ pivot_fail() {
     {
         echo
         echo "!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!"
-        echo "!! PERSISTENT_ROOT_DIR='${TARGET}' is set, but the pivot root failed"
+        echo "!! ROOT_PERSIST_DIR='${TARGET}' is set, but the pivot root failed"
         echo "!! (exit status ${status})."
         if [ -n "$message" ]; then
             echo "!! ${message}"
@@ -107,12 +107,12 @@ NEW="${TARGET%/}"
 NEW="${NEW:-/}"
 case "$NEW" in
     /)
-        pivot_fail 1 "PERSISTENT_ROOT_DIR must be a directory below '/', not '/'."
+        pivot_fail 1 "ROOT_PERSIST_DIR must be a directory below '/', not '/'."
         ;;
     /*)
         ;;
     *)
-        pivot_fail 1 "PERSISTENT_ROOT_DIR must be an absolute path (got '${TARGET}')."
+        pivot_fail 1 "ROOT_PERSIST_DIR must be an absolute path (got '${TARGET}')."
         ;;
 esac
 
