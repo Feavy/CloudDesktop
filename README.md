@@ -218,6 +218,12 @@ installed application's own launcher — never a command sent from the browser.
 Icons are resolved from the desktop's icon theme (`IconThemeName` from the
 xfconf xsettings defaults, falling back to hicolor) and served by the API.
 
+Launched applications start in the desktop user's home — a `.desktop` file's own
+`Path=` still wins — so a terminal opens in `$HOME` rather than the server's
+`/app` or a persistent root's `/`. Terminals opened from the desktop itself use
+the same directory: `install.sh` seeds it as xfce4-terminal's
+`default-working-directory` through `/etc/xdg`, and the session starts there.
+
 ### Running as a non-root user
 
 `clouddesktop-desktop` and `clouddesktop-full` both run as an unprivileged user,

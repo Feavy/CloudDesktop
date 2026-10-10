@@ -343,7 +343,11 @@ function launchApp(id) {
 
     const run = (cmd, args) => {
       const opts = { env: X_ENV, detached: true, stdio: 'ignore' };
+      // The .desktop file's own Path= wins; otherwise start in the desktop
+      // user's home, so an app that takes its directory implicitly -- the
+      // terminal above all -- does not inherit the server's cwd.
       if (app.wdPath && fs.existsSync(app.wdPath)) opts.cwd = app.wdPath;
+      else if (config.LAUNCH_CWD) opts.cwd = config.LAUNCH_CWD;
       const child = spawn(cmd, args, opts);
       child.on('error', done);
       child.unref();

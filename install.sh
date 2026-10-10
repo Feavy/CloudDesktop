@@ -835,6 +835,28 @@ DESKTOP_HOME="$(getent passwd "$DESKTOP_USER" | cut -d: -f6)"
 # writes, so they must exist and be owned by the runtime user.
 mkdir -p "$DESKTOP_HOME/Desktop" "$DESKTOP_HOME/Downloads" "$DESKTOP_HOME/.vnc"
 
+# ── Default terminal working directory ─────────────────────────────────────
+#
+# A terminal must open in the user's home. Two things decide that directory
+# and neither defaults to the home: the web client's app dock spawns from the
+# server process, whose cwd is the image's WORKDIR (/app), and a session under
+# a persistent root starts after pivot-root cd's to /. Bake xfce4-terminal's
+# "default working directory" preference into the system-wide xfconf channel,
+# exactly as the theme above is baked into /etc/xdg: xfconfd treats that file
+# as the desktop user's default, so no per-user copy has to be created or kept
+# in sync, and the terminal uses it whenever it is not given a directory of its
+# own. A per-user override still wins, so the preference stays editable.
+XCONF_TERMINAL_DIR=/etc/xdg/xfce4/xfconf/xfce-perchannel-xml
+mkdir -p "$XCONF_TERMINAL_DIR"
+cat > "${XCONF_TERMINAL_DIR}/xfce4-terminal.xml" <<TERMINAL
+<?xml version="1.0" encoding="UTF-8"?>
+<channel name="xfce4-terminal" version="1.0">
+  <property name="use-default-working-dir" type="bool" value="true"/>
+  <property name="default-working-directory" type="string" value="${DESKTOP_HOME}"/>
+</channel>
+TERMINAL
+log "Default terminal working directory: $DESKTOP_HOME"
+
 # Desktop shortcuts. They reuse the .desktop files the applications menu uses,
 # so synaptic's goes through synaptic-root and needs no polkit either. The
 # 0755 mode is the executable half of XFCE 4.18's launcher-trust check; the
@@ -988,6 +1010,14 @@ autocutsel -fork -selection CLIPBOARD >/dev/null 2>&1 &
 # step failed silently once already; /tmp is per-pod, so the log never grows
 # across restarts.
 xcape -e 'Super_L=Alt_L|F1;Super_R=Alt_L|F1' >/tmp/xcape.log 2>&1 &
+
+# Start the session in the user's home. Every application the session spawns
+# inherits this as its working directory, so a terminal (or the file manager)
+# opened from the panel, the menu or a desktop shortcut lands in $HOME rather
+# than on / or the image's WORKDIR. The web client's app dock does not run
+# under this session, and is covered by the xfce4-terminal preference seeded
+# in section 10 plus the launcher's own cwd (see server/apps.js).
+cd "$HOME"
 
 # Become the desktop.
 #

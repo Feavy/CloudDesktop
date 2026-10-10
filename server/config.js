@@ -67,6 +67,13 @@ module.exports = {
   HOME_DIR,
   XAUTHORITY: process.env.XAUTHORITY || path.join(HOME_DIR, '.Xauthority'),
 
+  // Where applications launched on the session display start. The dock's
+  // terminal is the reason this exists: spawned without a cwd it inherits the
+  // server's, which is the image's WORKDIR (/app) or / after pivot-root, and
+  // the terminal opens there instead of in the user's home. Undefined when the
+  // home is somehow missing, so the spawn falls back to inheritance.
+  LAUNCH_CWD: fs.existsSync(HOME_DIR) ? HOME_DIR : undefined,
+
   // True when the process is the one the container runtime watches, so
   // POST /api/desktop/restart can restart the pod by exiting.
   IS_CONTAINER: detectContainer(),

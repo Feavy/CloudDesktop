@@ -460,6 +460,9 @@ router.post('/launch', (req, res) => {
     env: X_ENV,
     detached: true,
     stdio: 'ignore',
+    // Same reason as the dock's launcher: a terminal with no directory of its
+    // own should open in the user's home, not in the server's cwd.
+    ...(config.LAUNCH_CWD ? { cwd: config.LAUNCH_CWD } : {}),
   });
 
   child.unref();

@@ -223,6 +223,14 @@ umount -l /.oldroot
 rmdir /.oldroot
 echo "pivot-root: running on the persistent root at '${NEW}'"
 
+# Start in the user's home, not in /, which is where the cwd lands after the
+# pivot. The desktop session and the web client inherit it, and so does
+# everything they launch -- a terminal above all -- unless it is given a
+# directory of its own.
+if [ -n "$DROP_HOME" ] && [ -d "$DROP_HOME" ]; then
+    cd "$DROP_HOME"
+fi
+
 # ── Hand over to tini as the image's unprivileged user ──────────────────────
 if [ -n "$DROP_UID" ]; then
     echo "pivot-root: starting '${*}' as ${DROP_USER} (uid ${DROP_UID}, gid ${DROP_GID})"
