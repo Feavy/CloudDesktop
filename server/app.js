@@ -8,6 +8,7 @@ const config = require('./config');
 const desktopRoutes = require('./routes/desktop');
 const appRoutes = require('./routes/apps');
 const { createVncWss } = require('./ws-proxy');
+const audio = require('./audio');
 
 const app = express();
 
@@ -127,12 +128,30 @@ const server = http.createServer(app);
 // already fronted by websocketify and WS_URL is configured.
 const vncWss = createVncWss();
 
+// /audio → the desktop's PulseAudio monitor as raw PCM. A second socket
+// rather than a channel on the VNC one, because RFB has no audio. See
+// server/audio.js.
+const audioWss = audio.createAudioWss();
+
 server.on('upgrade', (req, socket, head) => {
   const parsed = url.parse(req.url, true);
 
   if (parsed.pathname === '/websockify') {
     vncWss.handleUpgrade(req, socket, head, (ws) => {
       vncWss.emit('connection', ws, req);
+    });
+    return;
+  }
+
+  if (parsed.pathname === audio.AUDIO_PATH) {
+    // The endpoint answers only when the feature is on; a client that ignored
+    // /api/desktop/config gets a closed socket rather than a capture process.
+    if (!audio.isEnabled()) {
+      socket.destroy();
+      return;
+    }
+    audioWss.handleUpgrade(req, socket, head, (ws) => {
+      audioWss.emit('connection', ws, req);
     });
     return;
   }
@@ -145,6 +164,9 @@ server.listen(config.PORT, config.HOST, () => {
   console.log(`  VNC backend : ${config.VNC_HOST}:${config.VNC_PORT}`);
   console.log(`  X display   : ${config.DISPLAY}`);
   if (config.WS_URL) console.log(`  WebSocket   : ${config.WS_URL} (external, proxy unused)`);
+  console.log(`  Audio       : ${audio.isEnabled()
+    ? `${config.AUDIO_SOURCE} → ${audio.AUDIO_PATH} (${config.AUDIO_RATE} Hz, ${config.AUDIO_CHANNELS} ch)`
+    : 'disabled'}`);
 });
 
 // Graceful shutdown

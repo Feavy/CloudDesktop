@@ -6,6 +6,7 @@ const path = require('path');
 const fs = require('fs');
 const multer = require('multer');
 const config = require('../config');
+const audio = require('../audio');
 const apps = require('../apps');
 
 const router = express.Router();
@@ -151,6 +152,11 @@ router.get('/config', (_req, res) => {
     // to know which one: the browser performs 'session' itself over VNC.
     canRestart: mode !== 'off',
     restartMode: mode,
+    // Desktop audio: whether the /audio WebSocket is served at all, and the
+    // PCM format it sends. The browser hides the Sound setting when it is off
+    // (there is nothing to toggle in the client-only image, which has no
+    // desktop beside it to capture).
+    audio: audio.status(),
     canLaunch: availableApps,
   });
 });

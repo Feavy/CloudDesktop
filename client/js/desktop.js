@@ -2,6 +2,7 @@ import RFB from '/vendor/novnc/core/rfb.js';
 import { notify, init as initNotifications } from '/js/notifications.js?cv=%CACHE_VERSION%';
 import { createMobileKeyboard } from '/js/mobile-keyboard.js?cv=%CACHE_VERSION%';
 import { altGrKeysym } from '/js/altgr.js?cv=%CACHE_VERSION%';
+import { createRemoteAudio } from '/js/audio.js?cv=%CACHE_VERSION%';
 import { initAppDock, hideAppDock, setAppDockAutoHide, iconUrl } from '/js/appdock.js?cv=%CACHE_VERSION%';
 import { sendRestartShortcut } from '/js/session-restart.js?cv=%CACHE_VERSION%';
 
@@ -535,6 +536,69 @@ document.getElementById('topbar-theme').addEventListener('click', () => {
   setTheme(document.documentElement.getAttribute('data-theme') === 'dark' ? 'light' : 'dark');
 });
 
+// ── Desktop audio ───────────────────────────────────────────
+// The server captures the desktop's PulseAudio monitor and serves it on
+// /audio as raw PCM (server/audio.js); this is the Settings toggle for it.
+//
+// The preference is the browser's, in localStorage, because it is about this
+// client rather than the deployment -- the server's AUDIO_ENABLED decides
+// whether the endpoint exists at all, and the row stays hidden when it does
+// not (the client-only image has no desktop beside it to capture).
+
+const audioRow  = document.getElementById('settings-audio-row');
+const audioBtn  = document.getElementById('settings-audio');
+const audioHint = document.getElementById('settings-audio-hint');
+let remoteAudio = null;
+// Browsers block audio until a gesture, and a toast per page load is enough
+// of a nudge; the hint keeps saying it after the toast is gone. Same for the
+// server's error message, which the module re-sends on every retry.
+let audioBlockedNotified = false;
+let audioLastError = '';
+
+function setupAudio(audioCfg) {
+  if (!audioCfg || !audioCfg.enabled) return;
+
+  let enabled = localStorage.getItem('audio') !== 'off';
+
+  function setHint(status) {
+    if (!audioHint) return;
+    audioHint.textContent =
+      status === 'blocked' ? 'Click to start'
+      : status === 'error' ? 'Unavailable'
+      : '';
+  }
+
+  remoteAudio = createRemoteAudio({
+    url: audioCfg.url || '/audio',
+    rate: audioCfg.rate,
+    channels: audioCfg.channels,
+    onStatus(status, detail) {
+      setHint(status);
+      if (status === 'blocked' && !audioBlockedNotified) {
+        audioBlockedNotified = true;
+        notify('Sound is on — click anywhere to start it', 'info', 6000);
+      }
+      if (status === 'error' && detail && detail !== audioLastError) {
+        audioLastError = detail;
+        notify(`Sound unavailable: ${detail}`, 'warning', 6000);
+      }
+    },
+  });
+
+  audioRow.hidden = false;
+  audioBtn.textContent = enabled ? 'On' : 'Off';
+  audioBtn.addEventListener('click', () => {
+    enabled = !enabled;
+    localStorage.setItem('audio', enabled ? 'on' : 'off');
+    audioBtn.textContent = enabled ? 'On' : 'Off';
+    // A click is a gesture, which is also what the browser needs to start
+    // playback after a page load that had none.
+    remoteAudio.setEnabled(enabled);
+  });
+
+  remoteAudio.setEnabled(enabled);
+}
+
 // ── Server-side config (home dir, VNC endpoint, dock options) ───────────
 let SERVER_HOME = '/root';
 let SERVER_DESKTOP = '/root/Desktop';
@@ -554,6 +618,9 @@ const serverConfigReady = (async () => {
       if (cfg.homeDir) SERVER_HOME = cfg.homeDir;
       if (cfg.desktopDir) SERVER_DESKTOP = cfg.desktopDir;
       if (cfg.wsUrl) SERVER_WS_URL = cfg.wsUrl;
+
+      // Desktop audio, when this deployment serves it.
+      if (cfg.audio) setupAudio(cfg.audio);
 
       // The pod restarts itself when we run in a container, otherwise the
       // deployment has to supply a command. Without either, hide the button.

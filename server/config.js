@@ -13,6 +13,18 @@ function int(value, fallback) {
   return Number.isFinite(n) ? n : fallback;
 }
 
+// AUDIO_ENABLED is tri-state: a truthy value forces audio on, a falsy one turns
+// it off, and anything else -- including unset -- leaves it to autodetection
+// (which is on wherever the capture tool is installed). Same spirit as
+// RESTART_MODE, minus the guessing.
+function audioMode(value) {
+  if (value === undefined || value === '') return 'auto';
+  const v = String(value).trim().toLowerCase();
+  if (v === '1' || v === 'true' || v === 'yes' || v === 'on') return 'on';
+  if (v === '0' || v === 'false' || v === 'no' || v === 'off') return 'off';
+  return 'auto';
+}
+
 // Whether this process runs in a container that the runtime will bring back
 // when its main process exits. That is what makes a self-restart a pod
 // restart: Kubernetes always injects KUBERNETES_SERVICE_HOST and mounts the
@@ -72,6 +84,16 @@ module.exports = {
   HOME_DIR,
   XAUTHORITY: process.env.XAUTHORITY || path.join(HOME_DIR, '.Xauthority'),
 
+  // PulseAudio's native socket lives in $XDG_RUNTIME_DIR/pulse, and in a
+  // container logind is not running, so /run/user/<uid> usually does not
+  // exist. start-vnc and xfce-vnc-session both fall back to /tmp/runtime-<uid>
+  // (see install.sh), and this is the same default: the audio capture below
+  // and the desktop's daemon have to agree on one directory, and they do as
+  // long as neither side invents its own. A deployment that sets
+  // XDG_RUNTIME_DIR still gets it on both sides.
+  XDG_RUNTIME_DIR: process.env.XDG_RUNTIME_DIR
+    || `/tmp/runtime-${typeof process.getuid === 'function' ? process.getuid() : 0}`,
+
   // Where applications launched on the session display start. The dock's
   // terminal is the reason this exists: spawned without a cwd it inherits the
   // server's, which is the image's WORKDIR (/app) or / after pivot-root, and
@@ -92,4 +114,41 @@ module.exports = {
   // a dev checkout supplies the command that recycles its session. In a
   // container the restart is the pod itself and this is not consulted.
   RESTART_CMD: process.env.RESTART_CMD || '',
+
+  // ── Desktop audio ──────────────────────────────────────────
+  // What the remote desktop plays is captured from PulseAudio and streamed to
+  // the browser over /audio as raw PCM, which client/js/audio.js feeds to the
+  // Web Audio API. That is the same shape Guacamole uses and it keeps an
+  // encoder out of the image. install.sh is what makes the source exist: the
+  // desktop session runs PulseAudio with a virtual sink, because a container
+  // has no sound card.
+  //
+  // 'auto' enables it when the capture tool is installed -- true of the
+  // desktop and all-in-one images, false of the Alpine client-only image,
+  // where there is no desktop beside it to capture. 'on' forces it, 'off'
+  // makes GET /api/desktop/config report it unavailable and the /audio
+  // endpoint reject connections.
+  AUDIO_ENABLED: audioMode(process.env.AUDIO_ENABLED),
+
+  // parec, from pulseaudio-utils. Overridable so a deployment can point at a
+  // different capture tool, but the arguments below are parec's.
+  AUDIO_CAPTURE_CMD: process.env.AUDIO_CAPTURE_CMD || 'parec',
+
+  // PulseAudio source to capture. @DEFAULT_MONITOR@ is PulseAudio's own alias
+  // for the monitor of the default sink, so it follows install.sh's virtual
+  // sink without this file having to name it.
+  AUDIO_SOURCE: process.env.AUDIO_SOURCE || '@DEFAULT_MONITOR@',
+
+  AUDIO_RATE: int(process.env.AUDIO_RATE, 48000),
+  AUDIO_CHANNELS: int(process.env.AUDIO_CHANNELS, 2),
+
+  // How much audio parec asks PulseAudio for per read. This is the floor on
+  // the stream's latency.
+  AUDIO_LATENCY_MS: int(process.env.AUDIO_LATENCY_MS, 50),
+
+  // Chunks whose loudest sample falls below this are not sent at all. A null
+  // sink produces exact digital silence when nothing plays (every sample 0),
+  // so a small threshold drops idle bandwidth without touching real audio;
+  // quiet passages are far above it. 0 disables the gate and streams silence.
+  AUDIO_SILENCE_THRESHOLD: int(process.env.AUDIO_SILENCE_THRESHOLD, 32),
 };

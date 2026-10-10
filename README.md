@@ -2,7 +2,8 @@
 
 A browser front-end for a **TigerVNC + XFCE** desktop that is already running in a
 Kubernetes pod. It is a noVNC replacement with a proper dock: mobile touch controls,
-clipboard sync, chunked file transfer, resolution switching and a window switcher.
+clipboard sync, chunked file transfer, resolution switching, a window switcher and
+the desktop's sound.
 The dock itself is rendered by the browser — a bottom-edge app dock with pinned and
 running applications plus a full applications grid — replacing the Plank dock the
 desktop images used to ship.
@@ -43,7 +44,9 @@ Clipboard sync, chunked file upload/download with pause and resume, resolution
 switching via `xrandr`, the window switcher, CPU/RAM/disk stats, the
 PWA install path, and the mobile touch experience (virtual trackpad cursor, on-screen
 keyboard, pinch zoom, auto-fit resolution). The app launcher came back as a
-browser-side app dock (see [The app dock](#the-app-dock)).
+browser-side app dock (see [The app dock](#the-app-dock)), and the desktop's audio is
+now streamed to the browser as well (see [Desktop audio](#desktop-audio)) — the one
+thing noVNC never carried, because RFB has no audio channel.
 
 Non-US keyboards are handled too. noVNC sends the character a key produces, which
 is what lets an AZERTY desktop work against a QWERTY remote, but some browsers
@@ -68,6 +71,10 @@ Browser ──wss──▸ Traefik ──forwardAuth──▸ web client ──T
                      │                     (Node/Express)
                      └── TLS termination
 ```
+
+Audio rides a second WebSocket on that same origin: the web client runs `parec`
+against the desktop's PulseAudio monitor and streams the samples to the browser
+over `/audio` (see [Desktop audio](#desktop-audio)).
 
 The web client serves the page, the noVNC assets and a small API for the dock
 features. Its `/websockify` endpoint bridges the browser WebSocket to the VNC TCP
@@ -271,6 +278,42 @@ Launched applications start in the desktop user's home — a `.desktop` file's o
 `/app` or a persistent root's `/`. Terminals opened from the desktop itself use
 the same directory: `install.sh` seeds it as xfce4-terminal's
 `default-working-directory` through `/etc/xdg`, and the session starts there.
+
+### Desktop audio
+
+RFB has no audio channel, so the desktop's sound travels on a WebSocket of its
+own. `install.sh` installs PulseAudio, and `xfce-vnc-session` starts it with a
+virtual sink called `clouddesktop` — a container has no sound card, so without one
+everything the desktop plays would go nowhere. The desktop's audio lands on that
+sink's monitor, the web client runs `parec` against `@DEFAULT_MONITOR@`, and the
+samples go to the browser over `/audio`, where `client/js/audio.js` plays them with
+the Web Audio API. One capture process feeds every connected tab.
+
+Two consequences of the format are deliberate:
+
+- **Low latency rather than synchronised.** Chunks are scheduled onto a running
+  clock with ~120 ms of lead; when a stalled tab lets the backlog pass half a
+  second, the clock is re-anchored instead of drifting further behind. Nothing
+  tries to lip-sync with the VNC canvas, which is at least a frame behind anyway.
+- **Silence is not sent.** A virtual sink produces exact digital silence when
+  nothing is playing, so chunks quieter than `AUDIO_SILENCE_THRESHOLD` (32, about
+  -60 dBFS) never reach the wire. An idle desktop costs nothing; the stream is
+  ~1.5 Mbit/s only while it is actually making sound, which is the trade this
+  encoder-free design makes. Set the threshold to `0` to stream silence too.
+
+Browsers refuse to start audio without a user gesture, so playback begins on the
+first click or key press. Until then the Sound toggle in Settings says "Click to
+start"; after that it turns sound on and off, per browser, and the choice is kept
+in `localStorage`. `AUDIO_ENABLED=off` disables the feature server-side instead:
+`GET /api/desktop/config` then reports it unavailable and `/audio` closes
+connections rather than serving them.
+
+The web client and the desktop have to share a PulseAudio socket, which the
+all-in-one image and the sidecar shape both satisfy. The Alpine
+`clouddesktop-client` image installs no PulseAudio, so there it reports audio as
+unavailable and the Settings row stays hidden — a split deployment can still be
+bridged by giving both containers the same `XDG_RUNTIME_DIR`. The knobs are in
+[Configuration](#configuration).
 
 ### Startup script
 
@@ -498,7 +541,15 @@ All settings are environment variables.
 | `DISPLAY` | `:1` | X display used for `xrandr`/`xclip`/`wmctrl` |
 | `XAUTHORITY` | `$HOME/.Xauthority` | X authority file |
 | `HOME` | passwd entry | Base for `~/Desktop` and `~/Downloads` |
+| `XDG_RUNTIME_DIR` | `/tmp/runtime-<uid>` | Where PulseAudio's socket is found; must match the desktop session's for audio |
 | `PAGE_TITLE` | `CloudDesktop` | Browser tab / page title of the web client; substituted into `desktop.html` server-side |
+| `AUDIO_ENABLED` | `auto` | Desktop audio: `auto` (on where `parec` is installed), `on` or `off` |
+| `AUDIO_SOURCE` | `@DEFAULT_MONITOR@` | PulseAudio source captured, by PulseAudio name |
+| `AUDIO_RATE` | `48000` | PCM sample rate sent to the browser |
+| `AUDIO_CHANNELS` | `2` | PCM channel count |
+| `AUDIO_LATENCY_MS` | `50` | Audio requested per `parec` read; the stream's latency floor |
+| `AUDIO_SILENCE_THRESHOLD` | `32` | Sample level below which a chunk is not sent; `0` streams silence too |
+| `AUDIO_CAPTURE_CMD` | `parec` | Capture command, from `pulseaudio-utils` |
 | `RESTART_CMD` | *(unset)* | Restart command used when there is no container to restart (a dev checkout) |
 | `RESTART_MODE` | `auto` | Force how the dock restarts: `auto`, `pod`, `session`, `command` or `off` |
 | `ROOT_PERSIST_DIR` | *(unset)* | Mounted volume to `pivot_root` into at startup, so the whole root filesystem persists; see [Persistent root filesystem](#persistent-root-filesystem) |
@@ -622,6 +673,7 @@ All routes are unauthenticated; the reverse proxy gates them.
 | `GET` | `/api/desktop/download` | Download with Range support |
 | `POST` | `/api/desktop/rename` | Rename a file |
 | `WS` | `/websockify` | VNC stream (when `WS_URL` is unset) |
+| `WS` | `/audio` | Desktop audio as raw PCM; closed when `AUDIO_ENABLED=off` |
 
 The launcher allowlist is `terminal`, `synaptic`, `chrome`, `filemanager` and `vscode`,
 hardcoded in `server/routes/desktop.js`. The web client's app dock launches through

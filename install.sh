@@ -240,7 +240,7 @@ check_bin dbus-launch dbus-x11
 log "X tooling verified (xrandr, cvt, xclip, wmctrl, xauth, xdpyinfo, dbus-launch)"
 
 # ─────────────────────────────────────────────────────────────────────────────
-# 6. TigerVNC + websockify
+# 6. TigerVNC, websockify and desktop audio
 # ─────────────────────────────────────────────────────────────────────────────
 log "Installing TigerVNC and websockify"
 apt-get install -y -qq --no-install-recommends \
@@ -249,9 +249,32 @@ apt-get install -y -qq --no-install-recommends \
     websockify
 
 check_bin Xtigervnc   tigervnc-standalone-server
-check_bin vncconfig  tigervnc-common
-check_bin websockify websockify
+check_bin vncconfig   tigervnc-common
+check_bin websockify  websockify
 log "Xtigervnc: $(Xtigervnc -version 2>&1 | head -1)"
+
+# Desktop audio.
+#
+# A container has no sound card, so the XFCE session starts PulseAudio and
+# gives it a virtual sink (see xfce-vnc-session below); everything the desktop
+# plays lands on that sink's monitor, and the web client captures it with
+# parec and streams it to the browser over /audio. Without these packages the
+# session has no audio at all and the web client's endpoint has no source,
+# which is exactly the "no sound in the browser" this installs against.
+#
+# pulseaudio-utils is what carries parec and pactl. It is a dependency of
+# pulseaudio, but named explicitly because it is the binary the web client
+# spawns and a future packaging change that dropped the dependency would
+# otherwise silently take the audio feature with it.
+log "Installing PulseAudio (desktop audio)"
+apt-get install -y -qq --no-install-recommends \
+    pulseaudio \
+    pulseaudio-utils
+
+check_bin pulseaudio  pulseaudio
+check_bin pactl       pulseaudio-utils
+check_bin parec       pulseaudio-utils
+log "PulseAudio: $(pulseaudio --version 2>&1 | head -1)"
 
 # ─────────────────────────────────────────────────────────────────────────────
 # 7. XFCE desktop
@@ -1076,6 +1099,49 @@ export XDG_CONFIG_DIRS=/etc/xdg
 export XDG_DATA_DIRS=/usr/local/share:/usr/share
 export XDG_CURRENT_DESKTOP=XFCE
 
+# ── Desktop audio ───────────────────────────────────────────────────────────
+# A container has no sound card, so PulseAudio would expose no output at all
+# and the web client would have nothing to capture. Start it, give it a named
+# virtual sink and make that sink the default: everything the desktop plays
+# then lands on the sink's monitor, which is the source the web client
+# captures over /audio (see server/audio.js). Without this block that endpoint
+# has no source and reports audio as unavailable.
+#
+# --exit-idle-time=-1 and --disallow-exit keep the daemon alive for the whole
+# session: the stock default.pa unloads an idle daemon after a few seconds,
+# which would silently stop audio as soon as nothing had played for a while.
+if command -v pulseaudio >/dev/null 2>&1; then
+    if ! pulseaudio --check 2>/dev/null; then
+        echo "Starting PulseAudio"
+        pulseaudio --start --exit-idle-time=-1 --disallow-exit \
+            >/tmp/pulseaudio.log 2>&1 \
+            || echo "warning: PulseAudio failed to start; desktop audio will be unavailable" >&2
+    fi
+
+    # Only talk to the daemon once its socket exists.
+    for _ in $(seq 1 20); do
+        pulseaudio --check 2>/dev/null && break
+        sleep 0.25
+    done
+
+    if command -v pactl >/dev/null 2>&1 && pactl info >/dev/null 2>&1; then
+        # A named sink rather than whatever module-always-sink invented: the
+        # name is stable across image upgrades, and its monitor lives exactly
+        # as long as the sink does. Load it only when it is missing -- loading
+        # it twice would create a second sink and a second monitor.
+        if ! pactl list short sinks 2>/dev/null | grep -q '[[:space:]]clouddesktop[[:space:]]'; then
+            pactl load-module module-null-sink sink_name=clouddesktop \
+                sink_properties=device.description=CloudDesktop \
+                >/dev/null 2>&1 \
+                || echo "warning: could not create the virtual audio sink" >&2
+        fi
+        pactl set-default-sink clouddesktop >/dev/null 2>&1 \
+            || echo "warning: could not make the virtual audio sink the default" >&2
+    else
+        echo "warning: PulseAudio is not answering on $XDG_RUNTIME_DIR; desktop audio will be unavailable" >&2
+    fi
+fi
+
 # XFCE 4.18 only trusts a desktop launcher when GVfs metadata carries the
 # checksum of the .desktop file's contents; seed it for everything currently
 # on ~/Desktop (see trust-desktop-launchers for why this cannot happen at
@@ -1344,6 +1410,8 @@ cat <<SUMMARY
     display   ${VNC_DISPLAY}  ${VNC_GEOMETRY} depth ${VNC_DEPTH}
     RFB       :${VNC_PORT}  (loopback only)
     websocket :${VNC_WS_PORT}  (bound to 0.0.0.0)
+    audio     PulseAudio, virtual sink 'clouddesktop' -> captured on /audio
+              by the web client (AUDIO_ENABLED=off disables it)
 
   Installed runtimes:
 $(if [ "${INSTALL_NODE:-1}" = "1" ]; then echo "    node       $(node --version), npm $(npm --version)"; fi)
