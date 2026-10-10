@@ -121,10 +121,12 @@ RUN bash /tmp/install.sh && rm -rf /var/lib/apt/lists/*
 CMD ["start-desktop"]
 ```
 
-It writes two scripts into the image: `/usr/local/bin/start-vnc` (Xtigervnc + XFCE +
-websockify) and `/usr/local/bin/xfce-vnc-session` (the session inside X). After
-installing, it asserts that all 17 binaries the app invokes are actually present
-and fails the build naming the providing package if one is missing.
+It writes the desktop's scripts into the image: `/usr/local/bin/start-vnc`
+(Xtigervnc + XFCE + websockify) and `/usr/local/bin/xfce-vnc-session` (the session
+inside X, which also opens `~/.startup.sh` in a terminal — see
+[Startup script](#startup-script)). After installing, it asserts that all 17
+binaries the app invokes are actually present and fails the build naming the
+providing package if one is missing.
 
 `start-vnc` launches XFCE itself rather than delegating to the X server, because
 `Xtigervnc` has no `-xstartup` option — passing it fails with
@@ -233,9 +235,10 @@ the same directory: `install.sh` seeds it as xfce4-terminal's
 
 ### Startup script
 
-`~/.startup.sh` is the "run this when my desktop starts" hook. If the file
-exists, `xfce-vnc-session` runs it as the desktop user, with `DISPLAY` and the
-session's D-Bus already set up, at about the same time XFCE itself starts:
+`~/.startup.sh` is the "run this when my desktop starts" hook. If the file has at
+least one command in it, `xfce-vnc-session` opens an `xfce4-terminal` window on
+the desktop running it, as the desktop user, with `DISPLAY` and the session's
+D-Bus already set up at about the same time XFCE starts:
 
 ```bash
 xdg-open https://example.com        # a page in the default browser
@@ -243,17 +246,23 @@ xdg-open ~/Documents/report.pdf     # a file in whichever app claims it
 firefox &                           # a program, left running in the background
 ```
 
+The window is deliberate: it is where the script's output lands, and it stays at a
+shell prompt after the script finishes, so the output can be read and the terminal
+is still usable. The seeded copy is comments only, and a comment-only file opens no
+window — otherwise one would pop up on every start — so the hook is discoverable
+without being noisy. The window is opened in the background, so a script that
+blocks or fails cannot delay the desktop or take it down. It is an ordinary
+terminal, though: a program left in the foreground holds up the prompt, and a
+program started with `&` dies with the window unless it is detached
+(`setsid firefox &`).
+
 The images seed a bare, commented `~/.startup.sh` through `/etc/skel`, and the
 session recreates it from there when it is missing. That second part matters
 under Kubernetes: the manifests mount an `emptyDir` (or a PVC) over `$HOME`, which
 hides the copy baked into the image, so a fresh home would otherwise never show
 the hook. With `readOnlyRootFilesystem` and no writable `$HOME` there is nowhere
-to create it, and the file is simply absent.
-
-The script runs in the background, so it cannot delay the desktop and a script
-that fails or loops does not take it down. Its output goes to `/tmp/startup.log`,
-truncated on every start. Commands left in the foreground hold up the lines after
-them, so start long-running programs with `&`.
+to create it, and the file is simply absent. An image without `xfce4-terminal`
+still runs the script, with its output in `/tmp/startup.log` instead of a window.
 
 ### Running as a non-root user
 

@@ -927,24 +927,26 @@ cat > /etc/skel/.startup.sh <<'STARTUP'
 #!/bin/bash
 # ~/.startup.sh -- run once, automatically, when this desktop session starts.
 #
-# xfce-vnc-session runs this file as your user, with DISPLAY and the session's
-# D-Bus already set up, at about the same time XFCE itself starts. It is where
+# xfce-vnc-session runs this file in a terminal window on the desktop, as your
+# user, with DISPLAY and the session's D-Bus already set up and at about the same
+# time XFCE itself starts. The window stays at a shell prompt when the script
+# ends, so its output can be read and the terminal is still usable. It is where
 # "open these pages / start these programs when my desktop comes up" belongs:
 #
 #   xdg-open https://example.com        # a page in the default browser
 #   xdg-open ~/Documents/report.pdf     # a file in whichever app claims it
 #   firefox &                           # a program, left running in the background
 #
-# Nothing below those examples does anything yet: the file is seeded so the hook
-# can be found, not because there is something to run. Edits take effect on the
-# next desktop start -- no rebuild and no image change needed. Deleting the file
-# disables the hook until the next start, when the session recreates it, so
-# leaving it empty like this is how to turn it off for good.
+# Nothing below those examples does anything yet, and a file with no commands in
+# it opens no window: this copy was seeded so the hook can be found, not because
+# there is something to run. Add a real command (a bare ":" counts) and the next
+# start opens the window on it -- no rebuild and no image change needed. Deleting
+# the file disables the hook until the next start, when the session recreates it.
 #
-# The script runs in the background, so it can never delay the desktop or take it
-# down when it fails; its output goes to /tmp/startup.log (overwritten on every
-# start). Put long-running programs in the background with & yourself, or the
-# lines after them wait for the program to exit.
+# The window is opened in the background, so the script can never delay the
+# desktop or take it down when it fails. It is an ordinary terminal though: a
+# program left in the foreground holds up the prompt below it, and a background
+# one dies with the window unless it is detached (setsid firefox &).
 STARTUP
 chmod 0755 /etc/skel/.startup.sh
 
@@ -953,6 +955,45 @@ chmod 0755 /etc/skel/.startup.sh
 if [ ! -e "$DESKTOP_HOME/.startup.sh" ]; then
     install -m 0755 /etc/skel/.startup.sh "$DESKTOP_HOME/.startup.sh"
 fi
+
+# What xfce-vnc-session actually launches, inside a terminal window. A separate
+# file because xfce4-terminal's -x wants a command to exec, not a shell pipeline,
+# and because this is also the fallback when an image has no terminal emulator.
+cat > /usr/local/bin/run-startup-script <<'RUNSTARTUP'
+#!/bin/bash
+# Run the user's startup script in the foreground, for the terminal window
+# xfce-vnc-session opens on it. Written by install.sh; see ~/.startup.sh.
+set -u
+
+SCRIPT="$HOME/.startup.sh"
+if [ ! -f "$SCRIPT" ]; then
+    echo "No startup script at $SCRIPT"
+    exit 0
+fi
+
+echo "Running $SCRIPT"
+echo
+
+# Its own shebang when it is executable, bash otherwise, so saving the file
+# without the executable bit still works.
+if [ -x "$SCRIPT" ]; then
+    "$SCRIPT"
+else
+    bash "$SCRIPT"
+fi
+STATUS=$?
+
+echo
+echo "[startup script exited with status $STATUS]"
+
+# Stay at a prompt so the output above can be read and the window is usable.
+# Only when there is a terminal: this same script is the fallback path when
+# xfce4-terminal is missing, and there it must not sit waiting for input.
+if [ -t 0 ]; then
+    exec bash -i
+fi
+RUNSTARTUP
+chmod +x /usr/local/bin/run-startup-script
 
 chown -R "${DESKTOP_UID}:${DESKTOP_GID}" "$DESKTOP_HOME"
 
@@ -1076,18 +1117,31 @@ if [ ! -e "$STARTUP_SCRIPT" ] && [ -w "$HOME" ]; then
     cp /etc/skel/.startup.sh "$STARTUP_SCRIPT" 2>/dev/null || true
 fi
 
-# Backgrounded on purpose: a script that blocks, fails or loops must never keep
-# the desktop from starting, or take it down once it has. -x decides how it runs
-# -- its own shebang when executable, bash otherwise, so saving it without the
-# executable bit still works. stderr and stdout go to a per-pod log rather than
-# the pod log, which XFCE's own chatter already fills; /tmp is an emptyDir in the
-# manifests, so it is truncated here and never grows across restarts.
-if [ -f "$STARTUP_SCRIPT" ]; then
-    echo "Running $STARTUP_SCRIPT"
-    if [ -x "$STARTUP_SCRIPT" ]; then
-        "$STARTUP_SCRIPT" >/tmp/startup.log 2>&1 &
+# Run it, when there is something to run, in a terminal window on the desktop.
+#
+# Visible on purpose: a startup script's output is exactly what you want to see,
+# and a script that fails is otherwise invisible in a container desktop.
+#
+# A comment-only or empty file is skipped -- the seeded copy is exactly that, and
+# a blank window on every start would be noise. grep -v keeps the lines that are
+# neither blank nor a comment, so any real command (a bare ":" counts) opens it.
+#
+# The terminal is launched in the background, so whatever the script does can
+# never delay the desktop or take it down; run-startup-script keeps the window at
+# a prompt once the script has finished.
+if [ -f "$STARTUP_SCRIPT" ] \
+   && grep -qvE '^[[:space:]]*(#|$)' "$STARTUP_SCRIPT" 2>/dev/null; then
+    echo "Running $STARTUP_SCRIPT in a terminal window"
+    if command -v xfce4-terminal >/dev/null 2>&1; then
+        # --disable-server: this has to be a new window started by this session,
+        # never a command forwarded to an xfce4-terminal that is already up.
+        xfce4-terminal --disable-server --title="Startup script" \
+            -x /usr/local/bin/run-startup-script &
     else
-        bash "$STARTUP_SCRIPT" >/tmp/startup.log 2>&1 &
+        # No terminal emulator in the image: still run it, with the output in a
+        # log instead. stdin is /dev/null so the keep-the-window-open path above
+        # is skipped and this cannot wait on a tty that is not there.
+        /usr/local/bin/run-startup-script </dev/null >/tmp/startup.log 2>&1 &
     fi
 fi
 
