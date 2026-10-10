@@ -231,6 +231,30 @@ Launched applications start in the desktop user's home — a `.desktop` file's o
 the same directory: `install.sh` seeds it as xfce4-terminal's
 `default-working-directory` through `/etc/xdg`, and the session starts there.
 
+### Startup script
+
+`~/.startup.sh` is the "run this when my desktop starts" hook. If the file
+exists, `xfce-vnc-session` runs it as the desktop user, with `DISPLAY` and the
+session's D-Bus already set up, at about the same time XFCE itself starts:
+
+```bash
+xdg-open https://example.com        # a page in the default browser
+xdg-open ~/Documents/report.pdf     # a file in whichever app claims it
+firefox &                           # a program, left running in the background
+```
+
+The images seed a bare, commented `~/.startup.sh` through `/etc/skel`, and the
+session recreates it from there when it is missing. That second part matters
+under Kubernetes: the manifests mount an `emptyDir` (or a PVC) over `$HOME`, which
+hides the copy baked into the image, so a fresh home would otherwise never show
+the hook. With `readOnlyRootFilesystem` and no writable `$HOME` there is nowhere
+to create it, and the file is simply absent.
+
+The script runs in the background, so it cannot delay the desktop and a script
+that fails or loops does not take it down. Its output goes to `/tmp/startup.log`,
+truncated on every start. Commands left in the foreground hold up the lines after
+them, so start long-running programs with `&`.
+
 ### Running as a non-root user
 
 `clouddesktop-desktop` and `clouddesktop-full` both run as an unprivileged user,

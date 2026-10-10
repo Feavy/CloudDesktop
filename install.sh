@@ -908,6 +908,52 @@ done
 TRUST
 chmod +x /usr/local/bin/trust-desktop-launchers
 
+# ── Personal startup script ────────────────────────────────────────────────
+#
+# $HOME/.startup.sh is the "run this when my desktop starts" hook: xdg-open a
+# page, start a program, export per-session settings. A container desktop has no
+# login shell and no $HOME that outlives an image upgrade, so there is no
+# .profile or ~/.config/autostart to hang that on; xfce-vnc-session runs this
+# file instead (see section 11).
+#
+# It is seeded in two places. /etc/skel holds the single copy of the text: a
+# useradd -m after this point would copy it into that user's home, and
+# xfce-vnc-session copies it into $HOME whenever the file is missing -- the
+# normal Kubernetes case, where the manifests mount an emptyDir over $HOME and
+# hide whatever the image put there. The stock `ubuntu` user already existed when
+# this ran, so skel never applied to it and it is seeded explicitly below.
+mkdir -p /etc/skel
+cat > /etc/skel/.startup.sh <<'STARTUP'
+#!/bin/bash
+# ~/.startup.sh -- run once, automatically, when this desktop session starts.
+#
+# xfce-vnc-session runs this file as your user, with DISPLAY and the session's
+# D-Bus already set up, at about the same time XFCE itself starts. It is where
+# "open these pages / start these programs when my desktop comes up" belongs:
+#
+#   xdg-open https://example.com        # a page in the default browser
+#   xdg-open ~/Documents/report.pdf     # a file in whichever app claims it
+#   firefox &                           # a program, left running in the background
+#
+# Nothing below those examples does anything yet: the file is seeded so the hook
+# can be found, not because there is something to run. Edits take effect on the
+# next desktop start -- no rebuild and no image change needed. Deleting the file
+# disables the hook until the next start, when the session recreates it, so
+# leaving it empty like this is how to turn it off for good.
+#
+# The script runs in the background, so it can never delay the desktop or take it
+# down when it fails; its output goes to /tmp/startup.log (overwritten on every
+# start). Put long-running programs in the background with & yourself, or the
+# lines after them wait for the program to exit.
+STARTUP
+chmod 0755 /etc/skel/.startup.sh
+
+# Never overwrite an edited script: install.sh is re-run over the desktop image
+# by Dockerfile.full, and the user's file is theirs.
+if [ ! -e "$DESKTOP_HOME/.startup.sh" ]; then
+    install -m 0755 /etc/skel/.startup.sh "$DESKTOP_HOME/.startup.sh"
+fi
+
 chown -R "${DESKTOP_UID}:${DESKTOP_GID}" "$DESKTOP_HOME"
 
 # X11 unix sockets. X creates /tmp/.X11-unix itself but needs the directory to
@@ -1018,6 +1064,32 @@ xcape -e 'Super_L=Alt_L|F1;Super_R=Alt_L|F1' >/tmp/xcape.log 2>&1 &
 # under this session, and is covered by the xfce4-terminal preference seeded
 # in section 10 plus the launcher's own cwd (see server/apps.js).
 cd "$HOME"
+
+# The user's own startup script: $HOME/.startup.sh, seeded and documented by
+# install.sh. It is the only "log in and run this" hook the desktop has, since a
+# container has neither a login shell nor a ~/.config/autostart that survives an
+# image upgrade. Recreate it from /etc/skel when it is missing, because the
+# Kubernetes manifests mount an emptyDir over $HOME and would otherwise leave the
+# hook invisible; best-effort, since a read-only $HOME must not stop the session.
+STARTUP_SCRIPT="$HOME/.startup.sh"
+if [ ! -e "$STARTUP_SCRIPT" ] && [ -w "$HOME" ]; then
+    cp /etc/skel/.startup.sh "$STARTUP_SCRIPT" 2>/dev/null || true
+fi
+
+# Backgrounded on purpose: a script that blocks, fails or loops must never keep
+# the desktop from starting, or take it down once it has. -x decides how it runs
+# -- its own shebang when executable, bash otherwise, so saving it without the
+# executable bit still works. stderr and stdout go to a per-pod log rather than
+# the pod log, which XFCE's own chatter already fills; /tmp is an emptyDir in the
+# manifests, so it is truncated here and never grows across restarts.
+if [ -f "$STARTUP_SCRIPT" ]; then
+    echo "Running $STARTUP_SCRIPT"
+    if [ -x "$STARTUP_SCRIPT" ]; then
+        "$STARTUP_SCRIPT" >/tmp/startup.log 2>&1 &
+    else
+        bash "$STARTUP_SCRIPT" >/tmp/startup.log 2>&1 &
+    fi
+fi
 
 # Become the desktop.
 #
