@@ -45,6 +45,13 @@ PWA install path, and the mobile touch experience (virtual trackpad cursor, on-s
 keyboard, pinch zoom, auto-fit resolution). The app launcher came back as a
 browser-side app dock (see [The app dock](#the-app-dock)).
 
+Non-US keyboards are handled too. noVNC sends the character a key produces, which
+is what lets an AZERTY desktop work against a QWERTY remote, but some browsers
+report the *unshifted* key for AltGr combinations that are dead keys — Chromium
+on Windows sends "é" for AltGr+é on a French keyboard, so the remote typed é
+instead of `~`. Those keysyms are now resolved from the physical key on the way
+out (see `client/js/altgr.js`), so `~`, `` ` `` and `^` arrive as themselves.
+
 Two small fixes came out of the rewrite:
 
 - The clipboard endpoint waited on Node's `close` event, but `xclip` forks a

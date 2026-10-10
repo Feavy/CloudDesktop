@@ -1,6 +1,7 @@
 import RFB from '/vendor/novnc/core/rfb.js';
 import { notify, init as initNotifications } from '/js/notifications.js?cv=%CACHE_VERSION%';
 import { createMobileKeyboard } from '/js/mobile-keyboard.js?cv=%CACHE_VERSION%';
+import { altGrKeysym } from '/js/altgr.js?cv=%CACHE_VERSION%';
 import { initAppDock, hideAppDock, setAppDockAutoHide, iconUrl } from '/js/appdock.js?cv=%CACHE_VERSION%';
 import { sendRestartShortcut } from '/js/session-restart.js?cv=%CACHE_VERSION%';
 
@@ -234,6 +235,41 @@ vncContainer.addEventListener('keydown', async (e) => {
       } catch { /* silent */ }
     }, 300);
   }
+});
+
+// AltGr characters the browser reported as their unshifted key instead of the
+// character they produce (see altgr.js). noVNC's own handler would send the
+// wrong keysym for these, so they are taken over here: stop noVNC from seeing
+// the event and send the corrected keysym ourselves. The pair stays in
+// `altGrDown` until the matching keyup so the release uses the same keysym,
+// exactly as noVNC would have.
+const altGrDown = new Map();
+
+vncContainer.addEventListener('keydown', (e) => {
+  if (!rfb) return;
+  const keysym = altGrKeysym(e);
+  if (keysym === null) return;
+  e.preventDefault();
+  e.stopImmediatePropagation();
+  altGrDown.set(e.code, keysym);
+  rfb.sendKey(keysym, e.code, true);
+}, true);
+
+vncContainer.addEventListener('keyup', (e) => {
+  const keysym = altGrDown.get(e.code);
+  if (keysym === undefined) return;
+  e.preventDefault();
+  e.stopImmediatePropagation();
+  altGrDown.delete(e.code);
+  if (rfb) rfb.sendKey(keysym, e.code, false);
+}, true);
+
+// Never leave one of those keys held down on the remote when the page loses
+// focus mid-press (the same reason noVNC releases its own keys on blur).
+window.addEventListener('blur', () => {
+  if (!rfb) return;
+  for (const [code, keysym] of altGrDown) rfb.sendKey(keysym, code, false);
+  altGrDown.clear();
 });
 
 // ── Dock auto-hide ──────────────────────────────────────────
