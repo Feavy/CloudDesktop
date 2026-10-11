@@ -488,12 +488,18 @@ async function pollInstall(id) {
 
     if (job.state === 'done') {
       installJobId = null;
-      setInstallStatus('Installed. Refreshing applications…', 'done');
+      // The server drops a launcher on the desktop for what the package
+      // brought; say so, since that happened away from this dialog.
+      const n = (job.shortcuts || []).length;
+      const note = n === 0 ? ''
+        : n === 1 ? ' A shortcut was added to the desktop.'
+          : ` ${n} shortcuts were added to the desktop.`;
+      setInstallStatus(`Installed.${note}`, 'done');
       installStart.disabled = true; // the work is over; Cancel stays available
       installCancel.disabled = false;
-      notify('Application installed', 'success');
+      notify(n ? 'Application installed — desktop shortcut added' : 'Application installed', 'success');
       loadApps(true);
-      setTimeout(() => { if (!installModal.hidden) closeInstallModal(); }, 1600);
+      setTimeout(() => { if (!installModal.hidden) closeInstallModal(); }, 2400);
       return;
     }
 

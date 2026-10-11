@@ -231,7 +231,10 @@ because GVfs journals its metadata per filesystem: it has to be written on the r
 `/usr/local/bin/trust-desktop-launchers` does on every session start, called from
 `xfce-vnc-session`. It recomputes each launcher's checksum and writes it only when
 it has changed, so an unchanged desktop does not grow the journal, and launchers the
-user adds later are re-trusted the same way.
+user adds later are re-trusted the same way. An application installed from the app
+browser gets its launcher the same way, and the install invokes this helper itself
+so the new launcher works without a session restart — see
+[Installing an application from a .deb URL](#installing-an-application-from-a-deb-url).
 
 Because the shortcuts live in the image's `$HOME`, mounting a volume over `$HOME` —
 the `emptyDir` or PVC the Kubernetes manifests use — hides them along with the rest
@@ -291,6 +294,15 @@ job that the browser polls — the dialog shows the phase and, on failure, the t
 of apt's output. The new application appears in the grid as soon as it is
 installed. Closing the dialog does not cancel anything; reopening it resumes the
 display.
+
+Each application the package brings also gets a launcher on `~/Desktop`, the
+same treatment [the shipped shortcuts](#desktop-shortcuts) get: a copy of the
+entry the applications menu uses, `0755`, so the `Exec`, `Icon` and wrapper
+scripts stay identical to the menu item. The shortcut is trusted immediately by
+invoking `trust-desktop-launchers`, rather than waiting for the next session
+start; a package that ships several menu entries (LibreOffice, say) gets one
+launcher per entry, and a file the user already has at that name is never
+overwritten. The install job's `shortcuts` array lists what was created.
 
 Installation needs `apt-get` and root, which the Ubuntu images have (the
 unprivileged runtime user holds passwordless sudo — see
@@ -696,7 +708,7 @@ All routes are unauthenticated; the reverse proxy gates them.
 | `GET` | `/api/desktop/apps/icon/:id` | Resolved theme icon for an application (`?size=48`) |
 | `POST` | `/api/desktop/apps/launch` | Launch an installed application by id |
 | `POST` | `/api/desktop/apps/install` | Install a `.deb` from a download URL (`{ "url": "https://…" }`); answers `202` with a job, `400`/`409`/`501` on a bad URL, a busy installer or an image without `apt-get` |
-| `GET` | `/api/desktop/apps/install/:id` | Progress of that installation (`downloading` / `installing` / `done` / `error`, plus apt's output on failure) |
+| `GET` | `/api/desktop/apps/install/:id` | Progress of that installation (`downloading` / `installing` / `done` / `error`, the desktop shortcuts it created, plus apt's output on failure) |
 | `GET`/`PUT` | `/api/desktop/apps/pins` | The app dock's pinned application ids |
 | `POST` | `/api/desktop/launch` | Start an allowlisted app |
 | `POST` | `/api/desktop/upload` | Single-shot upload |

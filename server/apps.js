@@ -369,6 +369,9 @@ function scanApps(force = false) {
 
       byId.set(name, {
         id: name,
+        // Where the winning entry actually lives, so the desktop shortcut
+        // below can copy the same file the menu uses.
+        file: path.join(dir, name),
         name: (e.name || name.replace(/\.desktop$/, '')).trim(),
         comment: (e.comment || '').trim().slice(0, 160),
         exec: e.exec,
@@ -573,6 +576,71 @@ function launchApp(id) {
   });
 }
 
+// ── Desktop shortcuts ───────────────────────────────────────
+//
+// install.sh seeds a few launchers on ~/Desktop at build time (Terminal,
+// Chrome, VS Code, Synaptic). When the app browser installs a package, the
+// application it brought should be reachable the same way, so the installer
+// calls this with whatever newly appeared in the registry.
+//
+// A shortcut is a copy of the same .desktop entry the applications menu uses,
+// mode 0755 -- reusing the entry is the whole point: it keeps the Exec, Icon
+// and XDG plumbing (synaptic's synaptic-root wrapper, for one) identical to
+// the menu item, exactly as install.sh's own shortcuts do.
+
+function desktopHome() {
+  return path.join(config.HOME_DIR, 'Desktop');
+}
+
+// Returns the shortcut's file name, or null when there is nothing to do: an
+// unknown entry, an unwritable desktop, or a file the user already has at
+// that path -- a shortcut is never worth clobbering something the user put
+// there.
+function createDesktopShortcut(id) {
+  const app = getApp(id);
+  if (!app || !app.file) return null;
+  const dir = desktopHome();
+  const dest = path.join(dir, app.id);
+  try {
+    fs.mkdirSync(dir, { recursive: true });
+    if (fs.existsSync(dest)) return null;
+    fs.copyFileSync(app.file, dest);
+    fs.chmodSync(dest, 0o755);
+    return app.id;
+  } catch {
+    return null;
+  }
+}
+
+// XFCE 4.18 only runs a launcher that is executable *and* carries the sha256
+// of its contents in the GVfs attribute metadata::xfce-exe-checksum. The
+// executable bit is set above; the checksum is what install.sh's
+// /usr/local/bin/trust-desktop-launchers exists to write, and it runs at every
+// session start -- which would be too late for a launcher added to a session
+// that is already running. Invoke it now; it is idempotent, skips files whose
+// checksum already matches, and re-reads $HOME so it finds what we just wrote.
+//
+// It is deliberately fire-and-forget: gio needs the session D-Bus and can in
+// principle block, and a launcher that is trusted one session start late is a
+// far better failure than an install that never reports back.
+const TRUST_HELPER = '/usr/local/bin/trust-desktop-launchers';
+
+function trustDesktopLaunchers() {
+  try { fs.accessSync(TRUST_HELPER, fs.constants.X_OK); } catch { return false; }
+  try {
+    const child = spawn(TRUST_HELPER, [], {
+      env: launchEnv(),
+      detached: true,
+      stdio: 'ignore',
+    });
+    child.on('error', () => { /* the next session start retries */ });
+    child.unref();
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 // ── Window → application matching ───────────────────────────
 
 // Best-effort name of the process behind a window pid: the exe symlink
@@ -680,6 +748,8 @@ module.exports = {
   launchApp,
   matchWindow,
   defaultPins,
+  createDesktopShortcut,
+  trustDesktopLaunchers,
   // exported for tests
   parseDesktopEntry,
   parseSizeDir,

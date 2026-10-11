@@ -22,6 +22,10 @@
 // can easily outlive a reverse proxy's patience. startInstall returns a job
 // that the client polls, and the module keeps the last JOB_TTL_MS of them so
 // a browser that navigated away can still be told what happened.
+//
+// On success the applications the package brought also get a launcher on
+// ~/Desktop, the way install.sh seeds the launchers it ships; see
+// addDesktopShortcuts and apps.createDesktopShortcut.
 
 const { spawn, spawnSync } = require('child_process');
 const crypto = require('crypto');
@@ -31,6 +35,7 @@ const https = require('https');
 const os = require('os');
 const path = require('path');
 const config = require('./config');
+const apps = require('./apps');
 
 const TEMP_DIR = path.join(os.tmpdir(), 'clouddesktop-install');
 
@@ -42,6 +47,9 @@ const IDLE_TIMEOUT_MS = 60 * 1000;
 const LOG_TAIL = 8000;
 const JOB_TTL_MS = 15 * 60 * 1000;
 const MAX_JOBS = 20;
+// A package is expected to bring a handful of menu entries. The cap only
+// exists so a pathological .deb cannot carpet ~/Desktop.
+const MAX_SHORTCUTS = 12;
 
 // One install at a time. dpkg's database lock makes concurrent apt runs
 // queue or fail anyway, and a single job is all the UI shows.
@@ -270,6 +278,7 @@ function publicJob(job) {
     error: job.error,
     bytes: job.bytes,
     total: job.total,
+    shortcuts: job.shortcuts || [],
     log: job.state === 'error' ? lastLines(job.log, 6) : '',
   };
 }
@@ -277,6 +286,29 @@ function publicJob(job) {
 function getJob(id) {
   const job = jobs.get(id);
   return job ? publicJob(job) : null;
+}
+
+// Give the applications apt just installed a launcher on ~/Desktop each, the
+// same treatment install.sh gives the launchers it ships. `before` is the
+// registry's ids from before apt ran; detection is that diff rather than
+// `dpkg -L <package>` on purpose, because the diff is exactly the set that
+// now appears in the app browser too, so the desktop and the grid agree.
+//
+// A package may ship several menu entries (LibreOffice ships one per module);
+// each gets its own launcher, up to MAX_SHORTCUTS. Entries the user already
+// has a file for are skipped by createDesktopShortcut.
+function addDesktopShortcuts(before) {
+  const created = [];
+  for (const app of apps.listApps(true)) {
+    if (before.has(app.id)) continue;
+    if (created.length >= MAX_SHORTCUTS) break;
+    const name = apps.createDesktopShortcut(app.id);
+    if (name) created.push(name);
+  }
+  // XFCE will not run them until GVfs carries their checksum; see
+  // apps.trustDesktopLaunchers.
+  if (created.length) apps.trustDesktopLaunchers();
+  return created;
 }
 
 async function runInstall(job) {
@@ -297,6 +329,10 @@ async function runInstall(job) {
     job.state = 'installing';
     job.message = 'Installing…';
 
+    // Snapshot before apt: anything that appears in the registry afterwards
+    // is what this package brought.
+    const before = new Set(apps.listApps(true).map((a) => a.id));
+
     const result = await installPackage(file, job);
     if (result.code !== 0) {
       const err = new Error(lastLines(result.output, 4) || `apt-get exited with code ${result.code}`);
@@ -304,6 +340,7 @@ async function runInstall(job) {
       throw err;
     }
 
+    job.shortcuts = addDesktopShortcuts(before);
     job.state = 'done';
     job.message = 'Installed';
   } catch (err) {
@@ -364,6 +401,7 @@ function startInstall(url) {
     error: null,
     bytes: 0,
     total: 0,
+    shortcuts: [],
     log: '',
     running: true,
     startedAt: Date.now(),
