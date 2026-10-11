@@ -821,6 +821,45 @@ if [ "${INSTALL_DOCS:-0}" = "1" ]; then
     apt-get install -y -qq --no-install-recommends libreoffice-calc libreoffice-writer
 fi
 
+# ── No keyring: kill the "Choose password for new keyring" dialog ────────────
+#
+# The desktop install above pulls in gnome-keyring -- it sits in the recommended
+# closure of the XFCE packages (GVfs and Thunar want it) and this script installs
+# with recommends enabled -- which leaves an org.freedesktop.secrets provider one
+# D-Bus activation away. Chrome and VS Code both ask libsecret for a password
+# store while starting, so the daemon gets activated, finds no keyring to unlock
+# and puts up "Choose password for new keyring". Nobody can answer that dialog
+# usefully -- a container session starts from a fresh $HOME (the Kubernetes
+# manifests mount an emptyDir over it), so a keyring created here would not
+# outlive the pod -- and until it is dismissed it blocks the application behind
+# it. The image therefore makes the secret service unactivatable instead.
+#
+# Only the D-Bus activation files go, not the package: evolution-data-server
+# Depends on gnome-keyring, so purging it would drag the GVfs backend stack out
+# with it. With no org.freedesktop.secrets to activate, libsecret fails the
+# lookup and Chrome and VS Code fall back on their built-in plaintext store --
+# exactly what they do on a machine with no keyring -- and neither prompts.
+# Nothing else here asks for a secret: XFCE only Suggests the keyring, and no
+# application the image installs declares it.
+#
+# The XDG autostart entries are removed too. They are OnlyShowIn=GNOME;Unity;MATE;
+# so xfce4-session already skips them (the session sets XDG_CURRENT_DESKTOP=XFCE),
+# but a session branded as another desktop would otherwise start the daemon
+# directly and bring the dialog back.
+log "Removing gnome-keyring activation (the \"Choose password for new keyring\" dialog)"
+rm -f /usr/share/dbus-1/services/org.freedesktop.secrets.service \
+      /usr/share/dbus-1/services/org.gnome.keyring.service \
+      /usr/share/dbus-1/services/org.freedesktop.impl.portal.Secret.service \
+      /etc/xdg/autostart/gnome-keyring-secrets.desktop \
+      /etc/xdg/autostart/gnome-keyring-pkcs11.desktop \
+      /etc/xdg/autostart/gnome-keyring-ssh.desktop
+
+# Fail the build rather than ship the dialog: libsecret needs an activatable
+# org.freedesktop.secrets before it can put one up.
+if [ -e /usr/share/dbus-1/services/org.freedesktop.secrets.service ]; then
+    die "org.freedesktop.secrets is still activatable; Chrome and VS Code will prompt for a new keyring"
+fi
+
 # ─────────────────────────────────────────────────────────────────────────────
 # 10. Unprivileged runtime user
 #

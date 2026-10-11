@@ -172,6 +172,25 @@ Docker icons for apps that aren't installed are hidden automatically — `canLau
 in `/api/desktop/config` is resolved against `$PATH` at startup, so a minimal image
 simply reports a shorter list.
 
+### No keyring prompt
+
+The XFCE packages pull in `gnome-keyring` — it is in their recommended closure, and
+`evolution-data-server` hard-depends on it — which leaves an
+`org.freedesktop.secrets` provider one D-Bus activation away. Chrome and VS Code both
+ask libsecret for a password store as they start, so the daemon would be activated,
+find no keyring and put up **"Choose password for new keyring"**: a dialog a container
+session cannot answer (the home directory is a fresh `emptyDir` on every start) and
+that blocks the application behind it until it is dismissed.
+
+`install.sh` removes the D-Bus activation files (`org.freedesktop.secrets`,
+`org.gnome.keyring`, and the `org.freedesktop.impl.portal.Secret` portal backend) and
+gnome-keyring's XDG autostart entries — the latter are `OnlyShowIn=GNOME;Unity;MATE;`,
+so XFCE already skips them, but a differently-branded session would not — and fails
+the build if the secret service is still activatable. The package itself stays, because
+purging it would take the GVfs backend stack with it. With nothing to activate,
+libsecret fails the lookup and both applications fall back on their built-in plaintext
+password store, exactly as they do on a machine with no keyring, and neither prompts.
+
 ### Look and feel
 
 Both desktop images are themed at build time unless `INSTALL_THEME=0` is passed:
