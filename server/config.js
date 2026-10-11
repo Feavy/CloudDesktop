@@ -115,6 +115,14 @@ module.exports = {
   // container the restart is the pod itself and this is not consulted.
   RESTART_CMD: process.env.RESTART_CMD || '',
 
+  // ── In-browser installation ────────────────────────────────
+  // The app browser can install a package from a .deb download URL
+  // (POST /api/desktop/apps/install). The download is capped here so a bad or
+  // hostile URL cannot fill the disk. The feature is reported as unavailable
+  // by /api/desktop/config where apt-get is absent, as on the Alpine
+  // client-only image.
+  DEB_MAX_BYTES: int(process.env.DEB_MAX_MB, 512) * 1024 * 1024,
+
   // ── Desktop audio ──────────────────────────────────────────
   // What the remote desktop plays is captured from PulseAudio and streamed to
   // the browser over /audio as raw PCM, which client/js/audio.js feeds to the

@@ -227,9 +227,16 @@
     <div class="modal-card apps-card">
       <div class="apps-head">
         <h3>Applications</h3>
-        <button id="apps-close" class="apps-close-btn" title="Close" aria-label="Close">
-          <svg viewBox="0 0 16 16" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><line x1="3" y1="3" x2="13" y2="13"/><line x1="13" y1="3" x2="3" y2="13"/></svg>
-        </button>
+        <div class="apps-head-actions">
+          <button id="apps-install" class="apps-install-btn" hidden
+                  title="Install an application from a .deb download URL">
+            <svg viewBox="0 0 16 16" width="13" height="13" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M8 2v7.5"/><path d="M4.8 6.6 8 9.8l3.2-3.2"/><path d="M2.8 12.4h10.4"/></svg>
+            <span>Install</span>
+          </button>
+          <button id="apps-close" class="apps-close-btn" title="Close" aria-label="Close">
+            <svg viewBox="0 0 16 16" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><line x1="3" y1="3" x2="13" y2="13"/><line x1="13" y1="3" x2="3" y2="13"/></svg>
+          </button>
+        </div>
       </div>
       <input type="text" id="apps-search" class="apps-search" placeholder="Search applications…" spellcheck="false" autocomplete="off">
       <div class="apps-filters">
@@ -244,6 +251,29 @@
   <!-- Floating context menu for app icons (dock + grid): focus a specific
        window, launch a new instance, pin/unpin, close the app's windows. -->
   <div id="app-context-menu" class="app-ctx-menu" hidden></div>
+
+  <!-- Install an application from a .deb download URL, opened by the app
+       browser's Install button. The server downloads the package and runs
+       apt-get on it; the modal shows the phases and any apt error. -->
+  <div id="install-modal" class="modal" hidden>
+    <div class="modal-card install-card">
+      <h3>Install Application</h3>
+      <label class="field-label" for="install-url">Debian package (.deb) download URL</label>
+      <input type="url" id="install-url" class="install-input"
+             placeholder="https://example.com/app_1.0_amd64.deb"
+             spellcheck="false" autocomplete="off" autocapitalize="off">
+      <p class="install-hint">The server downloads the package and installs it with APT, resolving its
+        dependencies. This runs with administrator rights on the desktop.</p>
+      <div id="install-status" class="install-status" hidden>
+        <span class="install-spinner" aria-hidden="true"></span>
+        <span id="install-status-text"></span>
+      </div>
+      <div class="modal-row" style="margin-top:14px">
+        <button id="install-start" class="btn-primary">Install</button>
+        <button id="install-cancel" class="btn-ghost">Cancel</button>
+      </div>
+    </div>
+  </div>
 
   <!-- ═══════════════════════════════════════ Modals ═══════════════════════════════════════ -->
 

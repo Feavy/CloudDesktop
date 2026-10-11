@@ -474,6 +474,7 @@ body.mobile-fullscreen #vnc-container { inset: 0 !important; }
 
 /* Modal inputs */
 .modal-card input[type="text"],
+.modal-card input[type="url"],
 .modal-card input[type="password"] {
   width: 100%; padding: 10px 12px;
   background: var(--dock-item-bg);
@@ -485,6 +486,7 @@ body.mobile-fullscreen #vnc-container { inset: 0 !important; }
   transition: border-color 0.15s, box-shadow 0.15s;
 }
 .modal-card input[type="text"]:focus,
+.modal-card input[type="url"]:focus,
 .modal-card input[type="password"]:focus {
   border-color: var(--accent);
   box-shadow: 0 0 0 3px rgba(10, 132, 255, 0.18);
@@ -968,6 +970,7 @@ body.mobile-fullscreen #vnc-container { inset: 0 !important; }
 
   /* Inputs */
   .modal-card input[type="text"],
+  .modal-card input[type="url"],
   .modal-card input[type="password"] {
     padding: 12px 14px; font-size: 16px;
   }

@@ -8,6 +8,7 @@ const multer = require('multer');
 const config = require('../config');
 const audio = require('../audio');
 const apps = require('../apps');
+const installer = require('../installer');
 
 const router = express.Router();
 
@@ -143,6 +144,7 @@ function restartMode() {
 // GET /api/desktop/config — environment info and which dock actions apply
 router.get('/config', (_req, res) => {
   const mode = restartMode();
+  const install = installer.installCapability();
   res.json({
     homeDir: RUN_HOME,
     desktopDir: DESKTOP_DIR,
@@ -152,6 +154,12 @@ router.get('/config', (_req, res) => {
     // to know which one: the browser performs 'session' itself over VNC.
     canRestart: mode !== 'off',
     restartMode: mode,
+    // Whether "install a .deb from a URL" can work at all: the app browser
+    // hides its Install button where apt-get is missing (the client-only
+    // Alpine image) rather than offering one that always fails. The reason is
+    // for API consumers and for diagnosing a deployment that expected it on.
+    canInstallDeb: install.available,
+    installDebReason: install.available ? '' : install.reason,
     // Desktop audio: whether the /audio WebSocket is served at all, and the
     // PCM format it sends. The browser hides the Sound setting when it is off
     // (there is nothing to toggle in the client-only image, which has no

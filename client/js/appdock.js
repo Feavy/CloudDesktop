@@ -12,6 +12,8 @@
 //   GET  /api/desktop/apps/icon/:id  resolved theme icon
 //   POST /api/desktop/apps/launch    launch by application id
 //   GET/PUT /api/desktop/apps/pins   the dock's pin list
+//   POST /api/desktop/apps/install   install a .deb from a download URL
+//   GET  /api/desktop/apps/install/:id  poll that installation
 //   GET     /api/desktop/windows     open windows (+ appId per window)
 //   POST    /api/desktop/windows/*   focus / minimize / close
 
@@ -43,6 +45,13 @@ const appsSearch     = document.getElementById('apps-search');
 const appsFilterAll  = document.getElementById('apps-filter-all');
 const appsFilterRun  = document.getElementById('apps-filter-running');
 const appsCloseBtn   = document.getElementById('apps-close');
+const appsInstallBtn = document.getElementById('apps-install');
+const installModal   = document.getElementById('install-modal');
+const installUrl     = document.getElementById('install-url');
+const installStart   = document.getElementById('install-start');
+const installCancel  = document.getElementById('install-cancel');
+const installStatus  = document.getElementById('install-status');
+const installStatusText = document.getElementById('install-status-text');
 const ctxMenu        = document.getElementById('app-context-menu');
 
 // ── State ───────────────────────────────────────────────────
@@ -57,6 +66,13 @@ let lastWinSig = '';
 let lastFocused = new Map();  // appId → last window id we focused
 let filterRunning = false;
 let searchQuery = '';
+// Install-from-URL: whether this deployment can do it at all (apt on Ubuntu
+// images, not on the Alpine client), the poll timer while a job runs, and the
+// job id so closing the modal mid-install does not lose track of it — the
+// server keeps working either way, and reopening resumes the display.
+let canInstallDeb = false;
+let installTimer = null;
+let installJobId = null;
 
 // Set when an action (long-press, menu open) must swallow the click that
 // the same gesture would otherwise produce.
@@ -404,6 +420,142 @@ function openAppsView() {
   if (!opts.isTouch) appsSearch.focus();
 }
 
+// ── Install from a .deb download URL ────────────────────────
+//
+// The server downloads the package and runs apt-get on it, which takes far
+// longer than one request should, so it answers with a job and this side
+// polls it. The button only exists where the server said apt is available.
+
+function setInstallStatus(text, cls = '') {
+  installStatus.hidden = false;
+  installStatus.className = 'install-status' + (cls ? ` ${cls}` : '');
+  installStatusText.textContent = text;
+}
+
+function setInstallBusy(busy) {
+  installStart.disabled = busy;
+  installCancel.disabled = busy;
+  installUrl.disabled = busy;
+  installStart.textContent = busy ? 'Installing…' : 'Install';
+}
+
+function stopInstallPolling() {
+  clearTimeout(installTimer);
+  installTimer = null;
+}
+
+function closeInstallModal() {
+  stopInstallPolling();
+  installModal.hidden = true;
+  installStatus.hidden = true;
+  installUrl.value = '';
+  setInstallBusy(false);
+}
+
+function openInstallModal() {
+  installStatus.hidden = true;
+  installStatusText.textContent = '';
+  setInstallBusy(false);
+  installModal.hidden = false;
+  // A job that was still running when the modal was last dismissed picks up
+  // where it left off; the server never stopped working on it.
+  if (installJobId) {
+    setInstallBusy(true);
+    setInstallStatus('Checking installation…');
+    pollInstall(installJobId);
+  } else if (!opts.isTouch) {
+    installUrl.focus();
+  }
+}
+
+const fmtMB = (bytes) => `${(bytes / 1048576).toFixed(1)} MB`;
+
+async function pollInstall(id) {
+  // desktop.js's shared Escape/backdrop handler hides any modal directly, so
+  // a poll can be orphaned by a close it never saw; stop on arrival.
+  if (installModal.hidden) return;
+  try {
+    const res = await fetch(`/api/desktop/apps/install/${encodeURIComponent(id)}`,
+      { credentials: 'same-origin' });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok || !data.job) {
+      // The server forgets finished jobs after a while (and loses them all on
+      // a restart); stop chasing one it no longer has.
+      if (res.status === 404) installJobId = null;
+      throw new Error(data.error || 'Lost track of the installation');
+    }
+    const job = data.job;
+
+    if (job.state === 'done') {
+      installJobId = null;
+      setInstallStatus('Installed. Refreshing applications…', 'done');
+      installStart.disabled = true; // the work is over; Cancel stays available
+      installCancel.disabled = false;
+      notify('Application installed', 'success');
+      loadApps(true);
+      setTimeout(() => { if (!installModal.hidden) closeInstallModal(); }, 1600);
+      return;
+    }
+
+    if (job.state === 'error') {
+      installJobId = null;
+      setInstallStatus(job.error || 'Installation failed', 'error');
+      setInstallBusy(false);
+      notify('Installation failed', 'error');
+      return;
+    }
+
+    let text = job.message || 'Working…';
+    if (job.state === 'downloading') {
+      text = job.total
+        ? `Downloading… ${Math.min(99, Math.round((job.bytes / job.total) * 100))}%`
+        : `Downloading… ${fmtMB(job.bytes)}`;
+    }
+    setInstallStatus(text);
+    installTimer = setTimeout(() => pollInstall(id), 1000);
+  } catch (err) {
+    // A job we still believe in but cannot currently reach — a blip, or the
+    // server restarting — is worth another look while the dialog is open.
+    // The 404 branch above clears installJobId first, so a job the server has
+    // genuinely forgotten lands in the error path instead of looping.
+    if (installJobId && !installModal.hidden) {
+      setInstallStatus('Connection lost — retrying…');
+      installTimer = setTimeout(() => pollInstall(id), 2500);
+      return;
+    }
+    setInstallStatus(err.message || 'Installation failed', 'error');
+    setInstallBusy(false);
+  }
+}
+
+async function submitInstall() {
+  const url = installUrl.value.trim();
+  if (!/^https?:\/\//i.test(url)) {
+    setInstallStatus('Enter the http:// or https:// URL of a .deb package', 'error');
+    return;
+  }
+  stopInstallPolling();
+  setInstallBusy(true);
+  setInstallStatus('Starting…');
+  try {
+    const res = await jsonFetch('/api/desktop/apps/install', 'POST', { url });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok || !data.job) throw new Error(data.error || 'Installation failed');
+    installJobId = data.job.id;
+    pollInstall(installJobId);
+  } catch (err) {
+    setInstallStatus(err.message || 'Installation failed', 'error');
+    setInstallBusy(false);
+  }
+}
+
+// Called from desktop.js once /api/desktop/config has answered: the app
+// browser only shows Install where the server can actually run apt.
+export function setCanInstallDeb(on) {
+  canInstallDeb = Boolean(on);
+  appsInstallBtn.hidden = !canInstallDeb;
+}
+
 // ── Context menu ────────────────────────────────────────────
 
 function closeCtxMenu() {
@@ -725,6 +877,21 @@ export function initAppDock(options = {}) {
   });
 
   appsCloseBtn.addEventListener('click', () => { appsModal.hidden = true; });
+
+  // ── Install from a .deb URL ──
+  // Hidden until /api/desktop/config says the server can run apt; the modal
+  // itself is in desktop.js's shared modal list, so Escape and a backdrop
+  // click close it there — closeInstallModal is the Cancel path.
+  appsInstallBtn.hidden = !canInstallDeb;
+  appsInstallBtn.addEventListener('click', openInstallModal);
+  installStart.addEventListener('click', submitInstall);
+  installCancel.addEventListener('click', closeInstallModal);
+  installUrl.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') {
+      e.preventDefault();
+      submitInstall();
+    }
+  });
 
   // The modal's own backdrop handling comes from desktop.css + the shared
   // Escape handler in desktop.js; only the context menu is managed here.

@@ -252,7 +252,9 @@ strip, and shows:
   opened from elsewhere is always one click away.
 - An **Apps** button that opens the applications grid: every installed
   application as a tile, with search, an *All / Running* filter and a dot on
-  every running app.
+  every running app. The grid also carries an **Install** button for adding a
+  package from a `.deb` download URL — see
+  [Installing an application from a .deb URL](#installing-an-application-from-a-deb-url).
 - **Minimize All** and **Close All** buttons beside it, acting on every open
   window rather than one application's. *Close All* asks for confirmation
   first, and both are dimmed while the desktop has no windows.
@@ -278,6 +280,34 @@ Launched applications start in the desktop user's home — a `.desktop` file's o
 `/app` or a persistent root's `/`. Terminals opened from the desktop itself use
 the same directory: `install.sh` seeds it as xfce4-terminal's
 `default-working-directory` through `/etc/xdg`, and the session starts there.
+
+### Installing an application from a .deb URL
+
+The applications grid has an **Install** button: paste the download URL of a
+Debian package and the server fetches it and hands it to `apt-get`, so its
+dependencies are resolved and it is configured normally. Because a download plus
+apt's own work easily outlives a proxy request, the install runs as a background
+job that the browser polls — the dialog shows the phase and, on failure, the tail
+of apt's output. The new application appears in the grid as soon as it is
+installed. Closing the dialog does not cancel anything; reopening it resumes the
+display.
+
+Installation needs `apt-get` and root, which the Ubuntu images have (the
+unprivileged runtime user holds passwordless sudo — see
+[Passwordless sudo](#passwordless-sudo)). The Alpine client-only image has
+neither, so `/api/desktop/config` reports `canInstallDeb: false` there and the
+button stays hidden. On a read-only root filesystem (the manifest's setting)
+apt has nowhere to write and the install fails: run the image from a persistent
+root (`ROOT_PERSIST_DIR`) or make the root filesystem writable. `DEB_MAX_MB`
+caps the download.
+
+This is the one route through which the web client runs something the user
+supplies, and a package's maintainer scripts run as root. The boundary is
+unchanged — the Traefik `forwardAuth` in front of the pod is what keeps
+unauthorised callers out, exactly as it is for the file-transfer API — and
+`server/installer.js` bounds what a URL can do: only `http(s)`, a size cap,
+redirect and idle-timeout limits, a check that the bytes really are a Debian
+package before apt sees them, and one installation at a time.
 
 ### Desktop audio
 
@@ -552,6 +582,7 @@ All settings are environment variables.
 | `AUDIO_CAPTURE_CMD` | `parec` | Capture command, from `pulseaudio-utils` |
 | `RESTART_CMD` | *(unset)* | Restart command used when there is no container to restart (a dev checkout) |
 | `RESTART_MODE` | `auto` | Force how the dock restarts: `auto`, `pod`, `session`, `command` or `off` |
+| `DEB_MAX_MB` | `512` | Largest `.deb` the app browser will download for installation, in MiB |
 | `ROOT_PERSIST_DIR` | *(unset)* | Mounted volume to `pivot_root` into at startup, so the whole root filesystem persists; see [Persistent root filesystem](#persistent-root-filesystem) |
 | `PERSISTENT_ROOT_USER` | `DESKTOP_USER` (`ubuntu`) | User the entrypoint drops back to after the pivot; `root` to stay root on purpose |
 | `DESKTOP_USER` | `ubuntu` | Unprivileged user the desktop runs as, also the default `PERSISTENT_ROOT_USER` |
@@ -664,6 +695,8 @@ All routes are unauthenticated; the reverse proxy gates them.
 | `GET` | `/api/desktop/apps` | Installed applications (XDG `.desktop` entries) |
 | `GET` | `/api/desktop/apps/icon/:id` | Resolved theme icon for an application (`?size=48`) |
 | `POST` | `/api/desktop/apps/launch` | Launch an installed application by id |
+| `POST` | `/api/desktop/apps/install` | Install a `.deb` from a download URL (`{ "url": "https://…" }`); answers `202` with a job, `400`/`409`/`501` on a bad URL, a busy installer or an image without `apt-get` |
+| `GET` | `/api/desktop/apps/install/:id` | Progress of that installation (`downloading` / `installing` / `done` / `error`, plus apt's output on failure) |
 | `GET`/`PUT` | `/api/desktop/apps/pins` | The app dock's pinned application ids |
 | `POST` | `/api/desktop/launch` | Start an allowlisted app |
 | `POST` | `/api/desktop/upload` | Single-shot upload |

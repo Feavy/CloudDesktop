@@ -5,17 +5,21 @@
 //   POST /api/desktop/apps/launch     launch by application id
 //   GET  /api/desktop/apps/pins       the saved dock pins (or the defaults)
 //   PUT  /api/desktop/apps/pins       save dock pins
+//   POST /api/desktop/apps/install    install a .deb from a download URL
+//   GET  /api/desktop/apps/install/:id  poll that installation
 //
 // Like the rest of the service this router is unauthenticated — the pod
 // sits behind Traefik with forwardAuth, so every request here is already
 // authorised. Launching is bounded to installed .desktop entries by the
-// registry; the pins file is the only thing this code writes.
+// registry; installation is the one route that runs a package's own
+// maintainer scripts, and server/installer.js is where that is contained.
 
 const express = require('express');
 const fs = require('fs');
 const path = require('path');
 const config = require('../config');
 const apps = require('../apps');
+const installer = require('../installer');
 
 const router = express.Router();
 
@@ -91,6 +95,28 @@ router.post('/launch', async (req, res) => {
   } catch (err) {
     res.status(500).json({ error: `Failed to launch ${id}` });
   }
+});
+
+// POST /api/desktop/apps/install — install a package from a .deb download URL.
+//
+// The download and apt run in the background; the response is the job the
+// client polls at GET /install/:id. Anything wrong with the request itself
+// (bad URL, unsupported scheme, no apt, an install already running) is
+// answered here with the installer's own status.
+router.post('/install', (req, res) => {
+  try {
+    const job = installer.startInstall(req.body?.url);
+    res.status(202).json({ job });
+  } catch (err) {
+    res.status(err.status || 500).json({ error: err.message || 'Installation failed' });
+  }
+});
+
+// GET /api/desktop/apps/install/:id — progress of an installation
+router.get('/install/:id', (req, res) => {
+  const job = installer.getJob(String(req.params.id || ''));
+  if (!job) return res.status(404).json({ error: 'Unknown installation' });
+  res.json({ job });
 });
 
 // GET /api/desktop/apps/pins — the dock's pinned application ids

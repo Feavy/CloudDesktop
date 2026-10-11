@@ -200,6 +200,34 @@
 
 .apps-head h3 { margin-bottom: 0; }
 
+/* Install button + close button share the header's trailing edge. */
+.apps-head-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.apps-install-btn {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  height: 28px;
+  padding: 0 12px;
+  background: var(--dock-item-bg);
+  border: none;
+  border-radius: 8px;
+  color: var(--text);
+  font-size: 12.5px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: background 0.15s, color 0.15s, transform 0.1s;
+}
+
+.apps-install-btn:hover { background: var(--dock-hover); color: var(--text-bright); }
+.apps-install-btn:active { transform: scale(0.97); }
+.apps-install-btn[hidden] { display: none; }
+.apps-install-btn svg { flex: none; }
+
 .apps-close-btn {
   display: flex;
   align-items: center;
@@ -349,6 +377,74 @@
 }
 
 .apps-empty[hidden] { display: none; }
+
+/* ═══════════════════════════════════════════════════════════
+   Install from a .deb URL (opened by the applications view)
+   ═══════════════════════════════════════════════════════════ */
+
+.install-card { max-width: 460px; }
+.install-card h3 { margin-bottom: 14px; }
+
+/* Mid-install the controls are locked; the shared buttons carry no disabled
+   look of their own, so say it here. */
+.install-card .btn-primary:disabled,
+.install-card .btn-ghost:disabled {
+  opacity: 0.5;
+  cursor: default;
+  transform: none;
+}
+
+.install-input { margin-bottom: 10px; }
+
+.install-hint {
+  margin: 0;
+  font-size: 12px;
+  line-height: 1.45;
+  color: var(--text-muted);
+}
+
+/* Phase text, and the tail of apt's output when it failed. The text is set
+   with textContent and may hold newlines, so white-space is preserved. */
+.install-status {
+  display: flex;
+  align-items: flex-start;
+  gap: 9px;
+  margin-top: 14px;
+  padding: 10px 12px;
+  background: var(--dock-item-bg);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  font-size: 12.5px;
+  line-height: 1.45;
+  color: var(--text);
+  white-space: pre-line;
+  overflow-wrap: anywhere;
+}
+
+.install-status[hidden] { display: none; }
+.install-status.done { border-color: rgba(48, 209, 88, 0.55); }
+.install-status.error { border-color: rgba(255, 69, 58, 0.55); }
+
+.install-spinner {
+  flex: none;
+  width: 13px;
+  height: 13px;
+  margin-top: 1px;
+  border: 2px solid var(--border);
+  border-top-color: var(--accent);
+  border-radius: 50%;
+  animation: install-spin 0.7s linear infinite;
+}
+
+/* Finished states have nothing left to wait for; the text carries the news. */
+.install-status.done .install-spinner,
+.install-status.error .install-spinner { display: none; }
+
+@keyframes install-spin { to { transform: rotate(360deg); } }
+
+@media (prefers-reduced-motion: reduce) {
+  .install-spinner { animation-duration: 2.4s; }
+}
 
 /* ═══════════════════════════════════════════════════════════
    App context menu (right-click / long-press on dock + grid)
@@ -562,6 +658,6 @@
   }
 }
 
-.app-dock-item, .apps-tile, .apps-chip, .apps-close-btn, .app-ctx-item, .app-ctx-min, .app-ctx-close {
+.app-dock-item, .apps-tile, .apps-chip, .apps-close-btn, .apps-install-btn, .app-ctx-item, .app-ctx-min, .app-ctx-close {
   touch-action: manipulation;
 }

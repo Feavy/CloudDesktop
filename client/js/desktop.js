@@ -3,7 +3,7 @@ import { notify, init as initNotifications } from '/js/notifications.js?cv=%CACH
 import { createMobileKeyboard } from '/js/mobile-keyboard.js?cv=%CACHE_VERSION%';
 import { altGrKeysym } from '/js/altgr.js?cv=%CACHE_VERSION%';
 import { createRemoteAudio } from '/js/audio.js?cv=%CACHE_VERSION%';
-import { initAppDock, hideAppDock, setAppDockAutoHide, iconUrl } from '/js/appdock.js?cv=%CACHE_VERSION%';
+import { initAppDock, hideAppDock, setAppDockAutoHide, setCanInstallDeb, iconUrl } from '/js/appdock.js?cv=%CACHE_VERSION%';
 import { sendRestartShortcut } from '/js/session-restart.js?cv=%CACHE_VERSION%';
 
 const statusOverlay = document.getElementById('status-overlay');
@@ -629,6 +629,10 @@ const serverConfigReady = (async () => {
       const btnRestart = document.getElementById('btn-restart');
       if (btnRestart) btnRestart.hidden = !CAN_RESTART;
 
+      // Installing a .deb needs apt-get on the server; the client-only image
+      // has none, and the app browser's Install button stays hidden there.
+      setCanInstallDeb(Boolean(cfg.canInstallDeb));
+
       if (!localStorage.getItem('upload-dest')) uploadDestInput.value = SERVER_DESKTOP;
     }
   } catch {}
@@ -914,7 +918,7 @@ initAppDock({ isTouch, isMobile, cacheVersion: APP_VERSION });
 // ── Modal dismiss: backdrop click & Escape ──────────────────
 
 const allModals = [resolutionModal, settingsModal, uploadModal, dirModal, filebrowserModal,
-  document.getElementById('apps-modal')];
+  document.getElementById('apps-modal'), document.getElementById('install-modal')];
 
 allModals.forEach((modal) => {
   modal.addEventListener('click', (e) => { if (e.target === modal) modal.hidden = true; });
