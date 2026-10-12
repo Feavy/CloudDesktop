@@ -147,12 +147,31 @@ function setXClipboard(text, selection = 'clipboard') {
 // the selection under, and noVNC has nothing to do with it: the extended
 // clipboard protocol carries text only, so the image exists for the remote
 // applications to paste and is never announced to the browser.
-function setXClipboardImage(png) {
-  return fetch('/api/desktop/clipboard/image', {
-    method: 'POST', credentials: 'same-origin',
-    headers: { 'Content-Type': 'image/png' },
-    body: png,
-  }).catch(() => {});
+//
+// Resolves to null on success, or to the reason it failed. A failed push is
+// otherwise indistinguishable from a paste that the focused application simply
+// has nothing to do with: in both cases Ctrl+V does nothing at all, with
+// nothing on screen to say which happened.
+async function setXClipboardImage(png) {
+  let res;
+  try {
+    res = await fetch('/api/desktop/clipboard/image', {
+      method: 'POST', credentials: 'same-origin',
+      headers: { 'Content-Type': 'image/png' },
+      body: png,
+    });
+  } catch {
+    return 'the desktop is unreachable';
+  }
+  if (res.ok) return null;
+
+  // The server answers a body it would not store with an error; 413 is the
+  // one worth naming, because a full-screen screenshot on a big display is
+  // what runs into it.
+  let reason = '';
+  try { reason = (await res.json()).error || ''; } catch { /* not JSON */ }
+  console.warn('Image paste failed:', res.status, reason);
+  return res.status === 413 ? 'the image is too large' : `the desktop refused it (${res.status})`;
 }
 
 // Hand text to the remote: the VNC clipboard -- which keeps noVNC's answer to
@@ -191,7 +210,13 @@ async function pushLocalClipboard(alsoPrimary = true) {
   const clip = await readLocalClipboard();
   if (clip) {
     if (clip.image) {
-      await setXClipboardImage(clip.image);
+      const failed = await setXClipboardImage(clip.image);
+      if (failed) {
+        // Nothing reached the desktop, so the replayed chord would paste
+        // whatever the clipboard held before -- say why instead.
+        notify(`Could not paste the image: ${failed}`, 'warning');
+        return '';
+      }
       if (alsoPrimary) await setXClipboard('', 'primary');
       return clip.text || '';
     }

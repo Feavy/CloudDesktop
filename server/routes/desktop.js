@@ -349,8 +349,13 @@ const PNG_MAGIC = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
 // The body is the image itself, with Content-Type: image/png. A body that is
 // not a PNG is refused rather than stored: the selection would advertise
 // image/png and every application pasting it would fail to decode.
+//
+// The size cap is generous on purpose: a full-screen screenshot of a large
+// display is easily tens of megabytes, and the file-upload endpoint next door
+// already accepts 100MB. Anything over the cap is answered 413, which the
+// client reports rather than swallowing (see desktop.js).
 router.post('/clipboard/image',
-  express.raw({ type: 'image/png', limit: '25mb' }),
+  express.raw({ type: 'image/png', limit: '64mb' }),
   (req, res) => {
     const png = req.body;
     if (!Buffer.isBuffer(png) || png.length <= PNG_MAGIC.length ||

@@ -416,6 +416,14 @@ meant. The image is never announced to the browser (nothing about it goes over
 VNC), so the local clipboard keeps whatever it had. An image copied *out of* the
 desktop is still not supported, for the same reason: the VNC clipboard is text.
 
+Pasting an image only shows up in an application that takes images — a browser
+page, an image editor, an office document. A text editor or a terminal has
+nowhere to put it, and an `<input type="file">` upload field cannot be pasted
+into in any browser, so Ctrl+V there does nothing whichever clipboard is in
+play. Only a push the server *refuses* is worth an error: the client toasts it
+(a screenshot past the size cap reads as "the image is too large") instead of
+leaving a paste that silently does nothing.
+
 Ctrl+C is intercepted when something is selected. The client cannot ask the
 remote whether anything is selected, so it tracks the gestures that create one —
 a drag, a double or triple click, a Shift+click, Shift+arrows — and the ones
