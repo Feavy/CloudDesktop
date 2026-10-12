@@ -48,6 +48,12 @@ browser-side app dock (see [The app dock](#the-app-dock)), and the desktop's aud
 now streamed to the browser as well (see [Desktop audio](#desktop-audio)) — the one
 thing noVNC never carried, because RFB has no audio channel.
 
+The control strip on the left edge also carries a **Fit Windows** button. It sweeps
+every open window and pulls the ones that a resolution change — or a drag — left
+hanging past an edge back inside the work area, shrinking any that no longer fit.
+Windows the window manager already places (maximized, fullscreen, the panel and the
+desktop itself) are left alone; see `POST /api/desktop/windows/fit`.
+
 Non-US keyboards are handled too. noVNC sends the character a key produces, which
 is what lets an AZERTY desktop work against a QWERTY remote, but some browsers
 report the *unshifted* key for AltGr combinations that are dead keys — Chromium
@@ -723,6 +729,7 @@ All routes are unauthenticated; the reverse proxy gates them.
 | `POST` | `/api/desktop/windows/focus` | Raise and focus a window |
 | `POST` | `/api/desktop/windows/minimize` | Minimize a window (`wmctrl -b add,hidden`) |
 | `POST` | `/api/desktop/windows/close` | Ask a window to close (`wmctrl -ic`) |
+| `POST` | `/api/desktop/windows/fit` | Move (and shrink) every window that hangs past an edge back inside the work area |
 | `GET` | `/api/desktop/apps` | Installed applications (XDG `.desktop` entries) |
 | `GET` | `/api/desktop/apps/icon/:id` | Resolved theme icon for an application (`?size=48`) |
 | `POST` | `/api/desktop/apps/launch` | Launch an installed application by id |

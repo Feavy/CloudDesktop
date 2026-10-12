@@ -765,6 +765,36 @@ document.querySelectorAll('.res-btn').forEach((btn) => {
   });
 });
 
+// ── Fit windows on screen ───────────────────────────────────
+
+// One server-side sweep: every window that hangs off the edge of the screen
+// is moved back inside the work area, and shrunk when it is larger than the
+// screen. The usual cause is a resolution change, which leaves windows sized
+// for the old one stranded past the new edges. The geometry work lives in the
+// server, which is the side that can ask the window manager; this only
+// reports what came of it.
+document.getElementById('btn-fit-windows').addEventListener('click', async () => {
+  try {
+    const res = await fetch('/api/desktop/windows/fit', {
+      method: 'POST', credentials: 'same-origin',
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) {
+      notify(data.error || 'Could not fit the windows on screen', 'error');
+      return;
+    }
+    const n = data.moved || 0;
+    if (n === 0) {
+      notify('All windows already fit on screen', 'info');
+    } else {
+      notify(n === 1 ? 'Fitted a window on screen' : `Fitted ${n} windows on screen`,
+        'success');
+    }
+  } catch {
+    notify('Could not reach the desktop to fit the windows', 'error');
+  }
+});
+
 // ── Restart desktop ─────────────────────────────────────────
 
 // The restart takes the whole pod down, so the HTTP server and the VNC backend

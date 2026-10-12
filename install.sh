@@ -206,9 +206,9 @@ fi
 # 5. X server plumbing
 #
 #    NOTE: this is the part the web client silently depends on. It shells out
-#    to xclip, wmctrl, xrandr and cvt, so a container missing these renders the
-#    desktop fine but silently loses clipboard sync, the window switcher and
-#    resolution switching.
+#    to xclip, wmctrl, xprop, xrandr and cvt, so a container missing these
+#    renders the desktop fine but silently loses clipboard sync, the window
+#    switcher and resolution switching.
 # ─────────────────────────────────────────────────────────────────────────────
 log "Installing X server tools (xclip, wmctrl, xrandr, cvt, xauth)"
 apt-get install -y -qq --no-install-recommends \
@@ -236,8 +236,9 @@ check_bin xclip      xclip
 check_bin wmctrl     wmctrl
 check_bin xauth      xauth
 check_bin xdpyinfo   x11-utils
+check_bin xprop      x11-utils
 check_bin dbus-launch dbus-x11
-log "X tooling verified (xrandr, cvt, xclip, wmctrl, xauth, xdpyinfo, dbus-launch)"
+log "X tooling verified (xrandr, cvt, xclip, wmctrl, xauth, xdpyinfo, xprop, dbus-launch)"
 
 # ─────────────────────────────────────────────────────────────────────────────
 # 6. TigerVNC, websockify and desktop audio

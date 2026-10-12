@@ -20,6 +20,17 @@ const X_ENV = {
   HOME: config.HOME_DIR,
 };
 
+// Run wmctrl against the desktop display. Resolves its stdout on success and
+// null on failure, so callers can tell "no windows" (an empty list) from
+// "could not ask" (an unusable display).
+function wmctrl(args) {
+  return new Promise((resolve) => {
+    execFile('wmctrl', args, { env: X_ENV }, (err, stdout) => {
+      resolve(err ? null : String(stdout));
+    });
+  });
+}
+
 const RUN_HOME = config.HOME_DIR;
 
 const DESKTOP_DIR = path.join(RUN_HOME, 'Desktop');
@@ -498,14 +509,12 @@ router.post('/launch', (req, res) => {
 // ties a window back to the application that owns it for the dock's running
 // indicators.
 router.get('/windows', async (_req, res) => {
-  const execP = (args) => new Promise((resolve) => {
-    execFile('wmctrl', args, { env: X_ENV }, (err, stdout) => resolve(err ? '' : String(stdout)));
-  });
-
-  const [basic, withClass] = await Promise.all([
-    execP(['-l', '-p']),
-    execP(['-l', '-x']),
+  const [basicOut, classOut] = await Promise.all([
+    wmctrl(['-l', '-p']),
+    wmctrl(['-l', '-x']),
   ]);
+  const basic = basicOut || '';
+  const withClass = classOut || '';
 
   // Titles first: they anchor the -x parse below.
   const titleById = new Map();
@@ -603,6 +612,121 @@ router.post('/windows/minimize', (req, res) => {
     }
     res.json({ ok: true });
   });
+});
+
+// The frame extents (left, right, top, bottom) plus the flags that mean
+// "leave this one alone", in one xprop call. A window that has gone away
+// since the listing answers nothing, which reads as the same skip.
+//
+// The extents matter because the two wmctrl calls disagree about what a
+// coordinate refers to: `-l -G` reports the client origin shifted by the
+// frame, while `-e` takes the frame origin. For xfwm4 a decorated window has
+// extents like 2,2,34,2 — the 34 is the title bar — so working in client
+// coordinates without this would push the title bar off the top of the screen.
+function windowFrame(id) {
+  return new Promise((resolve) => {
+    execFile('xprop',
+      ['-id', id, '_NET_FRAME_EXTENTS', '_NET_WM_STATE', '_NET_WM_WINDOW_TYPE'],
+      { env: X_ENV }, (err, stdout) => {
+        if (err) return resolve(null);
+        const out = String(stdout);
+        const ext = out.match(
+          /_NET_FRAME_EXTENTS\(CARDINAL\)\s*=\s*(\d+),\s*(\d+),\s*(\d+),\s*(\d+)/);
+        resolve({
+          el: ext ? +ext[1] : 0,
+          er: ext ? +ext[2] : 0,
+          et: ext ? +ext[3] : 0,
+          eb: ext ? +ext[4] : 0,
+          // A maximized or fullscreen window is the window manager's to place,
+          // and it already tracks the work area; resizing one would only fight
+          // it. Docks and the desktop itself are not windows the user moves.
+          skip: /_NET_WM_STATE_(MAXIMIZED_VERT|MAXIMIZED_HORZ|FULLSCREEN)\b/.test(out)
+            || /_NET_WM_WINDOW_TYPE_(DOCK|DESKTOP)\b/.test(out),
+        });
+      });
+  });
+}
+
+// POST /api/desktop/windows/fit — bring every window that hangs off the edge
+// of the screen back inside the work area, shrinking the ones that are larger
+// than it.
+//
+// This is what repairs the desktop after the resolution drops: windows that
+// were placed for a bigger screen keep their old geometry and disappear past
+// the new edges. The target box is the current desktop's work area from
+// `wmctrl -d` (its WA column), which already excludes the top panel and any
+// other strut, rather than the raw screen size.
+router.post('/windows/fit', async (_req, res) => {
+  const [desktopsOut, listingOut] = await Promise.all([
+    wmctrl(['-d']),
+    wmctrl(['-l', '-G']),
+  ]);
+
+  // `0 * DG: 1912x914  VP: 0,0  WA: 0,27 1912x887  Workspace 1` — the starred
+  // line is the desktop in use; every desktop carries the same work area, so
+  // the first line is a safe fallback when none is marked.
+  const lines = (desktopsOut || '').split('\n');
+  const current = lines.find((l) => l.includes('*')) || lines[0] || '';
+  const box = current.match(/WA:\s*(-?\d+),(-?\d+)\s+(\d+)x(\d+)/);
+  if (!box) {
+    return res.status(500).json({ error: 'Could not read the desktop work area' });
+  }
+  const wa = { x: +box[1], y: +box[2], w: +box[3], h: +box[4] };
+
+  if (listingOut === null) {
+    return res.status(500).json({ error: 'Could not list the open windows' });
+  }
+
+  // `0x02400003  0 4 95 819 486 host title` — geometry and title together, so
+  // the parse does not need the separate `-l -p` pass.
+  const windows = [];
+  for (const line of listingOut.split('\n')) {
+    const m = line.match(
+      /^(0x[\da-f]+)\s+(-?\d+)\s+(-?\d+)\s+(-?\d+)\s+(\d+)\s+(\d+)\s+\S+\s*(.*)$/i);
+    if (!m) continue;
+    // Sticky windows (desktop -1) are the panel, the desktop background and
+    // other furniture, exactly the set /windows already leaves out.
+    if (parseInt(m[2], 10) < 0) continue;
+    if (m[7].trim() === 'Desktop') continue;
+    windows.push({ id: m[1], x: +m[3], y: +m[4], w: +m[5], h: +m[6] });
+  }
+
+  const moved = [];
+  await Promise.all(windows.map(async (win) => {
+    const ext = await windowFrame(win.id);
+    if (!ext || ext.skip) return;
+
+    // Frame rect in root coordinates: the client's reported origin minus the
+    // frame it is wrapped in, and the client size plus that frame.
+    const fx = win.x - 2 * ext.el;
+    const fy = win.y - 2 * ext.et;
+    const fw = win.w + ext.el + ext.er;
+    const fh = win.h + ext.et + ext.eb;
+
+    // Entirely inside the work area: the common answer, and the reason the
+    // response is almost always "0 moved".
+    if (fx >= wa.x && fy >= wa.y &&
+        fx + fw <= wa.x + wa.w && fy + fh <= wa.y + wa.h) {
+      return;
+    }
+
+    const nw = Math.min(fw, wa.w);
+    const nh = Math.min(fh, wa.h);
+    const nx = Math.min(Math.max(fx, wa.x), wa.x + wa.w - nw);
+    const ny = Math.min(Math.max(fy, wa.y), wa.y + wa.h - nh);
+
+    // `-e` wants the frame origin and the client size, so the new frame size
+    // is reduced by the extents again; the lower bound only guards against a
+    // frame taller or wider than the whole work area.
+    const cw = Math.max(1, nw - ext.el - ext.er);
+    const ch = Math.max(1, nh - ext.et - ext.eb);
+
+    if (await wmctrl(['-i', '-r', win.id, '-e', `0,${nx},${ny},${cw},${ch}`]) !== null) {
+      moved.push({ id: win.id, x: nx, y: ny, width: cw, height: ch });
+    }
+  }));
+
+  res.json({ ok: true, total: windows.length, moved: moved.length, windows: moved });
 });
 
 // ── Chunked Upload Endpoints ───────────────────────────────
