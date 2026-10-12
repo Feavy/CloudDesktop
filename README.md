@@ -382,6 +382,22 @@ unavailable and the Settings row stays hidden — a split deployment can still b
 bridged by giving both containers the same `XDG_RUNTIME_DIR`. The knobs are in
 [Configuration](#configuration).
 
+### Clipboard
+
+The browser clipboard and the desktop's X clipboard are kept in sync over the
+VNC connection, but only for the CLIPBOARD selection — an explicit **Copy**
+(Ctrl+C, or Copy in a context menu). Selecting text with the mouse sets the
+separate PRIMARY selection and deliberately does *not* reach the browser:
+`Xtigervnc` is started with `-SendPrimary=0`, because with its default of on the
+server forwards every selection to the viewer, and the web client would then
+overwrite the local clipboard each time you selected anything.
+
+Pasting into the desktop starts from the browser clipboard instead: Ctrl+V is
+intercepted, the local clipboard is pushed to the X CLIPBOARD selection and then
+replayed as a keystroke, and right/middle click push it too so the desktop's own
+Paste and middle-click paste see fresh content. `SetPrimary` keeps its default,
+so data pushed in this direction also sets the desktop's PRIMARY selection.
+
 ### Startup script
 
 `~/.startup.sh` is the "run this when my desktop starts" hook. If the file has at

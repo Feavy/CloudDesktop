@@ -1190,9 +1190,15 @@ fi
 /usr/local/bin/trust-desktop-launchers || true
 
 # Bridge the X clipboard to the VNC clipboard in both directions.
-#   vncconfig  = VNC side  <-> X selections
-#   autocutsel = PRIMARY   <-> CLIPBOARD
+#   vncconfig  = VNC side <-> the X CLIPBOARD selection
+#   autocutsel = the X CLIPBOARD selection <-> CUTBUFFER0 (legacy X clients)
 # Both are daemons, so they are left running on their own.
+#
+# Note that neither touches the PRIMARY selection: autocutsel with
+# -selection CLIPBOARD syncs CLIPBOARD with the cutbuffer, not PRIMARY. What
+# kept selection changes out of the browser clipboard is Xtigervnc's
+# -SendPrimary=0 in the launcher below (see section 12); without it the X
+# server itself forwards PRIMARY to every viewer.
 vncconfig -nowin >/dev/null 2>&1 &
 autocutsel -fork -selection CLIPBOARD >/dev/null 2>&1 &
 
@@ -1358,6 +1364,13 @@ export HOME
 export XDG_RUNTIME_DIR="${XDG_RUNTIME_DIR:-/tmp/runtime-$(id -u)}"
 mkdir -p "$XDG_RUNTIME_DIR" && chmod 700 "$XDG_RUNTIME_DIR"
 
+# -SendPrimary=0 keeps the X PRIMARY selection out of the VNC clipboard stream.
+# Xtigervnc's SendPrimary defaults to on, and with it on every text selection in
+# the desktop was announced to the browser as a clipboard change and written
+# straight to the local clipboard. Only the CLIPBOARD selection -- an explicit
+# Copy or Ctrl+C -- is synced now. SetPrimary keeps its default so clipboard
+# data pushed *into* the desktop still also sets PRIMARY, which is what
+# middle-click paste reads.
 Xtigervnc "$DISPLAY_NUM" \
     -geometry "$GEOMETRY" \
     -depth "$DEPTH" \
@@ -1368,7 +1381,8 @@ Xtigervnc "$DISPLAY_NUM" \
     -AcceptKeyEvents \
     -AcceptPointerEvents \
     -SendCutText \
-    -AcceptCutText &
+    -AcceptCutText \
+    -SendPrimary=0 &
 
 VNC_PID=$!
 
