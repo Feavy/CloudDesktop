@@ -138,12 +138,20 @@ function setXClipboard(text) {
 // Read local clipboard and push it to the remote (VNC protocol + X server).
 // Must be called from a user gesture, or the browser denies the read.
 // Returns the text that was pushed, or '' if nothing was read.
-async function pushLocalClipboard() {
+//
+// clipboardPasteFrom makes the server take the X PRIMARY selection as well as
+// CLIPBOARD (SetPrimary defaults to on), and an application that loses PRIMARY
+// drops its selection. So a push fired before a right-click would deselect the
+// very text the context menu is about to act on, and Copy would find nothing
+// selected. Only the paths that are about to consume PRIMARY -- Ctrl+V and the
+// middle click, both pastes -- may take it; right-click refreshes CLIPBOARD
+// alone.
+async function pushLocalClipboard(alsoPrimary = true) {
   if (!rfb) return '';
   try {
     const text = await navigator.clipboard.readText();
     if (text) {
-      rfb.clipboardPasteFrom(text);
+      if (alsoPrimary) rfb.clipboardPasteFrom(text);
       await setXClipboard(text);
     }
     return text;
@@ -177,7 +185,9 @@ vncContainer.addEventListener('keydown', async (e) => {
 // so this also triggers the browser's clipboard permission prompt if needed.
 //
 // Right click: forward the click immediately — the context menu that opens
-// gives the async push time to land before "Paste" is chosen.
+// gives the async push time to land before "Paste" is chosen. The push may not
+// touch PRIMARY: it would clear the selection the menu is acting on (see
+// pushLocalClipboard).
 //
 // Middle click: the remote app pastes on the button press itself, so the click
 // must be held back until the push has landed, then replayed to noVNC.
@@ -186,7 +196,7 @@ let middleClickPending = false;
 vncContainer.addEventListener('mousedown', async (e) => {
   if (!e.isTrusted || (e.button !== 1 && e.button !== 2)) return;
   if (e.button === 2 || !rfb) {
-    pushLocalClipboard();
+    pushLocalClipboard(false);
     return;
   }
 
@@ -221,22 +231,124 @@ vncContainer.addEventListener('mouseup', (e) => {
   }
 }, true);
 
-// Ctrl+C: also sync from X clipboard back to browser after a short delay
+// ── Remote selection tracking ───────────────────────────────
+//
+// The web client cannot ask the remote whether anything is selected, but it
+// sees every mouse and key event it forwards, and a selection only ever comes
+// from a handful of gestures: dragging with the left button held, a double or
+// triple click, or Shift+arrows extending an existing selection.
+// `selectionArmed` is set by the gestures that create a selection and cleared
+// by everything that destroys one -- a plain click, or any unshifted key press
+// (typing, or moving the cursor, collapses a selection).
+//
+// Both mistakes are recoverable, which is what makes this safe to guess:
+// a wrong "yes" reads the X PRIMARY selection on Ctrl+C, finds that a cleared
+// selection has left it unowned, and replays the keystroke; a wrong "no" lets
+// Ctrl+C reach the application exactly as it always has.
+let selectionArmed = false;
+let mouseDownX = 0, mouseDownY = 0;
+let lastMouseUpTime = 0, lastMouseUpX = 0, lastMouseUpY = 0;
+
+// Keys that never collapse a selection on their own: the modifiers a
+// selection-extending chord is built from, and keys that carry no character.
+const SELECTION_NEUTRAL_KEYS = new Set([
+  'Shift', 'Control', 'Alt', 'Meta', 'AltGraph', 'CapsLock', 'NumLock',
+  'ScrollLock', 'Dead', 'Compose',
+]);
+
+// The clipboard chords are intercepted further down and must not clear the
+// flag they are about to read.
+function isClipboardShortcut(e) {
+  return (e.ctrlKey || e.metaKey) &&
+      (e.key === 'c' || e.key === 'C' || e.key === 'x' || e.key === 'X' ||
+       e.key === 'v' || e.key === 'V');
+}
+
+vncContainer.addEventListener('mousedown', (e) => {
+  if (!e.isTrusted || e.button !== 0) return;
+  mouseDownX = e.clientX;
+  mouseDownY = e.clientY;
+}, true);
+
+vncContainer.addEventListener('mouseup', (e) => {
+  if (!e.isTrusted || e.button !== 0) return;
+  const now = performance.now();
+  const dragged = Math.hypot(e.clientX - mouseDownX, e.clientY - mouseDownY) >= 4;
+  const multiClick = now - lastMouseUpTime < 400 &&
+      Math.hypot(e.clientX - lastMouseUpX, e.clientY - lastMouseUpY) < 5;
+  selectionArmed = dragged || multiClick;
+  lastMouseUpTime = now;
+  lastMouseUpX = e.clientX;
+  lastMouseUpY = e.clientY;
+}, true);
+
+vncContainer.addEventListener('keydown', (e) => {
+  if (!e.isTrusted || e.shiftKey) return;
+  if (SELECTION_NEUTRAL_KEYS.has(e.key) || isClipboardShortcut(e)) return;
+  selectionArmed = false;
+}, true);
+
+// ── Ctrl+C: copy the selection, or interrupt ────────────────
+//
+// In a terminal Ctrl+C is SIGINT and in a text editor it is Copy, and the web
+// client cannot tell which is wanted. What it can tell is whether something is
+// selected: an interrupted command has no selection, copied text always does.
+// So when the tracking above says there is one, the keystroke is stopped
+// before noVNC and the X PRIMARY selection is copied to the browser clipboard
+// instead; otherwise Ctrl+C reaches the remote application untouched.
+//
+// PRIMARY rather than CLIPBOARD, because the selection is what Ctrl+C copies
+// and it is the one selection the VNC clipboard stream no longer carries now
+// that the server runs with -SendPrimary=0. The copy is also mirrored into the
+// remote CLIPBOARD, which is what the application's own Copy would have done,
+// so a paste on either side then sees the same text.
+//
+// An empty PRIMARY -- the selection vanished between arming and the key press,
+// say because new terminal output scrolled it away -- replays the keystroke,
+// so Ctrl+C never loses its interrupt role. And after a copy the flag is
+// cleared: the next Ctrl+C is then a plain SIGINT rather than a second copy,
+// so interrupting a process never costs more than one extra key press.
+function sendCtrlC() {
+  if (!rfb) return;
+  rfb.sendKey(0xFFE3, 'ControlLeft', true);
+  rfb.sendKey(0x0063, 'KeyC', true);
+  rfb.sendKey(0x0063, 'KeyC', false);
+  rfb.sendKey(0xFFE3, 'ControlLeft', false);
+}
+
 vncContainer.addEventListener('keydown', async (e) => {
   if (!rfb) return;
-  if ((e.ctrlKey || e.metaKey) && (e.key === 'c' || e.key === 'C')) {
-    // Let noVNC send the Ctrl+C normally, then after a moment read X clipboard
-    setTimeout(async () => {
-      try {
-        const res = await fetch('/api/desktop/clipboard', { credentials: 'same-origin' });
-        const data = await res.json();
-        if (data.text && navigator.clipboard) {
-          navigator.clipboard.writeText(data.text).catch(() => {});
-        }
-      } catch { /* silent */ }
-    }, 300);
+  if (!((e.ctrlKey || e.metaKey) && (e.key === 'c' || e.key === 'C'))) return;
+  // Ctrl+Shift+C is a copy chord in its own right (VTE terminals bind it);
+  // applications handle that one correctly, so it is never intercepted.
+  if (e.shiftKey) return;
+  if (!selectionArmed) return;   // pass through: SIGINT, or the app's own copy
+
+  e.preventDefault();
+  e.stopPropagation();
+  e.stopImmediatePropagation();
+
+  let text = '';
+  try {
+    const res = await fetch('/api/desktop/clipboard?selection=primary',
+                            { credentials: 'same-origin' });
+    if (res.ok) {
+      const data = await res.json();
+      text = typeof data.text === 'string' ? data.text : '';
+    }
+  } catch { /* unreadable: replay the keystroke below */ }
+
+  if (!text) {
+    // Nothing is selected after all. Ctrl+C goes to the application as if it
+    // had never been intercepted.
+    sendCtrlC();
+    return;
   }
-});
+
+  selectionArmed = false;
+  if (navigator.clipboard) navigator.clipboard.writeText(text).catch(() => {});
+  setXClipboard(text);
+}, true);
 
 // AltGr characters the browser reported as their unshifted key instead of the
 // character they produce (see altgr.js). noVNC's own handler would send the

@@ -322,9 +322,19 @@ router.post('/clipboard', (req, res) => {
 });
 
 // GET /api/desktop/clipboard
-router.get('/clipboard', (_req, res) => {
-  execFile('xclip', ['-selection', 'clipboard', '-o'], {
+//
+// ?selection=primary reads the X PRIMARY selection instead of CLIPBOARD. The
+// web client asks for it when the user presses Ctrl+C over a selection: the
+// selection lives in PRIMARY, which is exactly the selection the VNC clipboard
+// stream no longer carries now that Xtigervnc runs with -SendPrimary=0.
+router.get('/clipboard', (req, res) => {
+  const selection = req.query.selection === 'primary' ? 'primary' : 'clipboard';
+
+  execFile('xclip', ['-selection', selection, '-o'], {
     env: X_ENV,
+    // An owner that never answers must not hang the request: the client
+    // replays Ctrl+C when this fails, and a hung request would hang that.
+    timeout: 2000,
   }, (err, stdout) => {
     if (err) {
       return res.json({ text: '' });

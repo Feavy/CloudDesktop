@@ -394,9 +394,22 @@ overwrite the local clipboard each time you selected anything.
 
 Pasting into the desktop starts from the browser clipboard instead: Ctrl+V is
 intercepted, the local clipboard is pushed to the X CLIPBOARD selection and then
-replayed as a keystroke, and right/middle click push it too so the desktop's own
-Paste and middle-click paste see fresh content. `SetPrimary` keeps its default,
-so data pushed in this direction also sets the desktop's PRIMARY selection.
+replayed as a keystroke, and a right or middle click pushes it too. Only the
+pastes may take PRIMARY as well (`SetPrimary` keeps its default, which is what
+middle-click paste reads); a right-click pushes CLIPBOARD alone, because taking
+PRIMARY would clear the very selection the context menu is about to act on.
+
+Ctrl+C is intercepted when something is selected. The client cannot ask the
+remote whether anything is selected, so it tracks the gestures that create one —
+a drag, a double or triple click — and the ones that destroy it: a plain click,
+or any unshifted key press. With a selection, Ctrl+C reads the X PRIMARY
+selection over `GET /api/desktop/clipboard?selection=primary`, writes it to the
+local clipboard and mirrors it into the remote one, and stops the keystroke so a
+terminal does not turn it into SIGINT. With no selection, or when PRIMARY turns
+out to be empty by the time the key lands, the keystroke is replayed untouched
+and Ctrl+C keeps its usual meaning; pressing it again after a copy therefore
+interrupts. Ctrl+Shift+C is never intercepted — it is already a copy chord in
+VTE terminals.
 
 ### Startup script
 
