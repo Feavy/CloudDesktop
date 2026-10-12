@@ -393,23 +393,29 @@ server forwards every selection to the viewer, and the web client would then
 overwrite the local clipboard each time you selected anything.
 
 Pasting into the desktop starts from the browser clipboard instead: Ctrl+V is
-intercepted, the local clipboard is pushed to the X CLIPBOARD selection and then
-replayed as a keystroke, and a right or middle click pushes it too. Only the
-pastes may take PRIMARY as well (`SetPrimary` keeps its default, which is what
-middle-click paste reads); a right-click pushes CLIPBOARD alone, because taking
-PRIMARY would clear the very selection the context menu is about to act on.
+intercepted, the local clipboard is pushed to *both* X selections and then
+replayed as **Shift+Insert**. The chord matters: Ctrl+V is a paste in GTK and
+Electron text fields, but a VTE terminal never binds it — there it is
+quoted-insert, which is why a terminal prints `^V` and waits for the next
+character. Shift+Insert is the one chord that pastes everywhere: VTE reads
+PRIMARY with it, GTK reads CLIPBOARD, and both were just written. A right or
+middle click pushes too, and only the pastes take PRIMARY (`SetPrimary` keeps
+its default) — a right-click pushes CLIPBOARD alone, because taking PRIMARY
+would clear the very selection the context menu is about to act on.
 
 Ctrl+C is intercepted when something is selected. The client cannot ask the
 remote whether anything is selected, so it tracks the gestures that create one —
-a drag, a double or triple click — and the ones that destroy it: a plain click,
-or any unshifted key press. With a selection, Ctrl+C reads the X PRIMARY
-selection over `GET /api/desktop/clipboard?selection=primary`, writes it to the
-local clipboard and mirrors it into the remote one, and stops the keystroke so a
-terminal does not turn it into SIGINT. With no selection, or when PRIMARY turns
-out to be empty by the time the key lands, the keystroke is replayed untouched
-and Ctrl+C keeps its usual meaning; pressing it again after a copy therefore
-interrupts. Ctrl+Shift+C is never intercepted — it is already a copy chord in
-VTE terminals.
+a drag, a double or triple click, a Shift+click, Shift+arrows — and the ones
+that destroy it: a plain click, or any unshifted key press. With a selection,
+Ctrl+C reads the X PRIMARY selection over `GET /api/desktop/clipboard?selection=primary`,
+writes it to the local clipboard and mirrors it into the remote one, and stops
+the keystroke so a terminal does not turn it into SIGINT. With no selection, or
+when PRIMARY turns out to be empty by the time the key lands, the keystroke is
+replayed untouched and Ctrl+C keeps its usual meaning; pressing it again after a
+copy therefore interrupts. A toast says which of the two happened, because
+"the copy worked silently and the second press interrupted" is otherwise
+indistinguishable from "nothing was intercepted". Ctrl+Shift+C is never
+intercepted — it is already a copy chord in VTE terminals.
 
 ### Startup script
 

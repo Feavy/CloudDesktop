@@ -126,12 +126,14 @@ function onVncClipboard(e) {
   if (navigator.clipboard && text) navigator.clipboard.writeText(text).catch(() => {});
 }
 
-// Push text to X server clipboard via API
-function setXClipboard(text) {
+// Push text to an X selection via API. CLIPBOARD is what Ctrl+V reads in a
+// text editor; PRIMARY is what a terminal's Shift+Insert and a middle click
+// read, so the paste paths that must satisfy both push twice.
+function setXClipboard(text, selection = 'clipboard') {
   return fetch('/api/desktop/clipboard', {
     method: 'POST', credentials: 'same-origin',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ text }),
+    body: JSON.stringify({ text, selection }),
   }).catch(() => {});
 }
 
@@ -139,13 +141,17 @@ function setXClipboard(text) {
 // Must be called from a user gesture, or the browser denies the read.
 // Returns the text that was pushed, or '' if nothing was read.
 //
-// clipboardPasteFrom makes the server take the X PRIMARY selection as well as
-// CLIPBOARD (SetPrimary defaults to on), and an application that loses PRIMARY
-// drops its selection. So a push fired before a right-click would deselect the
-// very text the context menu is about to act on, and Copy would find nothing
-// selected. Only the paths that are about to consume PRIMARY -- Ctrl+V and the
-// middle click, both pastes -- may take it; right-click refreshes CLIPBOARD
-// alone.
+// A paste has to satisfy both X selections: CLIPBOARD is what Ctrl+V reads in
+// a text editor, PRIMARY is what a terminal's Shift+Insert and a middle click
+// read. So the paste paths write both -- clipboardPasteFrom hands the text to
+// the server's own clipboard (and keeps noVNC's answer to a server-side request
+// fresh), while the xclip writes take ownership synchronously, so the replayed
+// paste chord cannot outrun them.
+//
+// Only the paths that are about to consume the selection may take PRIMARY:
+// claiming it makes the application that owned it drop its selection, so a
+// push fired before a right-click would deselect the very text the context
+// menu is about to act on. Right-click therefore refreshes CLIPBOARD alone.
 async function pushLocalClipboard(alsoPrimary = true) {
   if (!rfb) return '';
   try {
@@ -153,30 +159,53 @@ async function pushLocalClipboard(alsoPrimary = true) {
     if (text) {
       if (alsoPrimary) rfb.clipboardPasteFrom(text);
       await setXClipboard(text);
+      if (alsoPrimary) await setXClipboard(text, 'primary');
     }
     return text;
   } catch { return ''; /* clipboard permission denied */ }
 }
 
-// Ctrl+V: intercept BEFORE noVNC, set X clipboard, wait, then replay keystroke
+// Ctrl+V: intercept BEFORE noVNC, set X clipboard, wait, then replay a paste
+//
+// The replay is Shift+Insert, not Ctrl+V, and that is the whole fix for
+// "Ctrl+V types ^V in the terminal": Ctrl+V is a paste in GTK and Electron
+// text fields, but a VTE terminal never sees it as one -- it is
+// quoted-insert, the chord that makes the shell take the next character
+// literally, which is exactly the ^V the terminal printed. Shift+Insert is
+// the one chord that pastes in both worlds: VTE binds it to paste (reading
+// PRIMARY), GTK binds it to paste-clipboard, and the push below writes both
+// X selections, so either consumer gets the same text.
+//
+// The modifiers the user is still holding are released first: noVNC already
+// forwarded the physical Control keydown, so a replayed Shift+Insert under it
+// would arrive as Ctrl+Shift+Insert, which nothing binds to a paste.
 vncContainer.addEventListener('keydown', async (e) => {
   if (!rfb) return;
   if ((e.ctrlKey || e.metaKey) && (e.key === 'v' || e.key === 'V')) {
+    // Ctrl+Shift+V is a paste chord of its own in VTE terminals; applications
+    // handle that one correctly, so it is never intercepted.
+    if (e.shiftKey) return;
+
     e.preventDefault();
     e.stopPropagation();
     e.stopImmediatePropagation();
 
-    const text = await pushLocalClipboard();
-    if (text) {
-      // Small delay to ensure xclip has written before sending Ctrl+V
-      await new Promise(r => setTimeout(r, 80));
+    await pushLocalClipboard();
 
-      // Replay Ctrl+V to remote desktop
-      rfb.sendKey(0xFFE3, 'ControlLeft', true);
-      rfb.sendKey(0x0076, 'KeyV', true);
-      rfb.sendKey(0x0076, 'KeyV', false);
-      rfb.sendKey(0xFFE3, 'ControlLeft', false);
-    }
+    // Small delay to ensure the xclip writes above own the selections before
+    // the paste lands.
+    await new Promise(r => setTimeout(r, 80));
+
+    if (e.ctrlKey) rfb.sendKey(0xFFE3, 'ControlLeft', false);
+    if (e.metaKey) rfb.sendKey(0xFFE7, 'MetaLeft', false);
+
+    // Shift+Insert. Replayed even when nothing was read: the remote's own
+    // clipboard is what gets pasted then, and silently swallowing the
+    // keystroke would leave Ctrl+V doing nothing at all.
+    rfb.sendKey(0xFFE1, 'ShiftLeft', true);
+    rfb.sendKey(0xFF63, 'Insert', true);
+    rfb.sendKey(0xFF63, 'Insert', false);
+    rfb.sendKey(0xFFE1, 'ShiftLeft', false);
   }
 }, true);
 
@@ -276,10 +305,28 @@ vncContainer.addEventListener('mouseup', (e) => {
   const dragged = Math.hypot(e.clientX - mouseDownX, e.clientY - mouseDownY) >= 4;
   const multiClick = now - lastMouseUpTime < 400 &&
       Math.hypot(e.clientX - lastMouseUpX, e.clientY - lastMouseUpY) < 5;
-  selectionArmed = dragged || multiClick;
+  // A Shift+click extends an existing selection without moving the pointer.
+  selectionArmed = dragged || multiClick || e.shiftKey;
   lastMouseUpTime = now;
   lastMouseUpX = e.clientX;
   lastMouseUpY = e.clientY;
+}, true);
+
+// Keyboard selection: Shift+arrows, Home, End and the paging keys extend a
+// selection in text widgets and in VTE terminals alike. Arming on the keyup
+// is what lets Ctrl+C copy a selection that was never made with the mouse. In
+// a terminal where the chord reached the shell instead of the selection
+// machinery, PRIMARY stays empty and the Ctrl+C handler replays the
+// keystroke, so nothing is lost.
+const SELECTION_EXTENDING_KEYS = new Set([
+  'ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown', 'Home', 'End',
+  'PageUp', 'PageDown',
+]);
+
+vncContainer.addEventListener('keyup', (e) => {
+  if (!e.isTrusted || !e.shiftKey) return;
+  if (!SELECTION_EXTENDING_KEYS.has(e.key)) return;
+  selectionArmed = true;
 }, true);
 
 vncContainer.addEventListener('keydown', (e) => {
@@ -340,7 +387,10 @@ vncContainer.addEventListener('keydown', async (e) => {
 
   if (!text) {
     // Nothing is selected after all. Ctrl+C goes to the application as if it
-    // had never been intercepted.
+    // had never been intercepted. The toast is what keeps the two cases apart,
+    // because without it "the selection scrolled away, so ^C appeared" and
+    // "nothing happened at all" look identical from the outside.
+    notify('Nothing selected — Ctrl+C was passed to the desktop', 'info', 2500);
     sendCtrlC();
     return;
   }
@@ -348,6 +398,7 @@ vncContainer.addEventListener('keydown', async (e) => {
   selectionArmed = false;
   if (navigator.clipboard) navigator.clipboard.writeText(text).catch(() => {});
   setXClipboard(text);
+  notify('Selection copied to your clipboard', 'success', 2000);
 }, true);
 
 // AltGr characters the browser reported as their unshifted key instead of the

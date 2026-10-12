@@ -288,6 +288,11 @@ router.post('/restart', (_req, res) => {
 });
 
 // POST /api/desktop/clipboard
+//
+// body.selection picks which X selection to write: 'clipboard' (the default)
+// is what Ctrl+V reads in a text editor, 'primary' is what a terminal's
+// Shift+Insert and a middle click read. The web client pushes both for a
+// paste.
 router.post('/clipboard', (req, res) => {
   const { text } = req.body;
 
@@ -295,13 +300,15 @@ router.post('/clipboard', (req, res) => {
     return res.status(400).json({ error: 'Text required' });
   }
 
+  const selection = req.body.selection === 'primary' ? 'primary' : 'clipboard';
+
   // Write to X clipboard using xclip.
   //
   // xclip forks a background process that owns the selection for as long as
   // the clipboard holds the text, and it inherits any inherited stdio. If we
   // wait for the 'close' event the request would never resolve, so we use
   // 'exit' and drop stdout/stderr.
-  const proc = spawn('xclip', ['-selection', 'clipboard'], {
+  const proc = spawn('xclip', ['-selection', selection], {
     env: X_ENV,
     stdio: ['pipe', 'ignore', 'ignore'],
   });
@@ -336,6 +343,10 @@ router.get('/clipboard', (req, res) => {
     // replays Ctrl+C when this fails, and a hung request would hang that.
     timeout: 2000,
   }, (err, stdout) => {
+    // The selections change constantly; a cached answer would replay a stale
+    // selection -- or worse, a stale "nothing selected" verdict, which is
+    // what decides whether Ctrl+C copies or interrupts.
+    res.set('Cache-Control', 'no-store');
     if (err) {
       return res.json({ text: '' });
     }
