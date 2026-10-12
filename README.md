@@ -412,10 +412,10 @@ writes it to the local clipboard and mirrors it into the remote one, and stops
 the keystroke so a terminal does not turn it into SIGINT. With no selection, or
 when PRIMARY turns out to be empty by the time the key lands, the keystroke is
 replayed untouched and Ctrl+C keeps its usual meaning; pressing it again after a
-copy therefore interrupts. A toast says which of the two happened, because
-"the copy worked silently and the second press interrupted" is otherwise
-indistinguishable from "nothing was intercepted". Ctrl+Shift+C is never
-intercepted — it is already a copy chord in VTE terminals.
+copy therefore interrupts. A successful copy is silent — toasting every copy
+would be noise — but the one outcome that would otherwise read as a failure, a
+selection that vanished before the key landed, says so in a toast.
+Ctrl+Shift+C is never intercepted — it is already a copy chord in VTE terminals.
 
 ### Startup script
 

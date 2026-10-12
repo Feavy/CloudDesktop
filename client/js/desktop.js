@@ -387,9 +387,11 @@ vncContainer.addEventListener('keydown', async (e) => {
 
   if (!text) {
     // Nothing is selected after all. Ctrl+C goes to the application as if it
-    // had never been intercepted. The toast is what keeps the two cases apart,
-    // because without it "the selection scrolled away, so ^C appeared" and
-    // "nothing happened at all" look identical from the outside.
+    // had never been intercepted. The toast is the only feedback this branch
+    // gets: a silent copy and a silent pass-through both look like "nothing
+    // happened", so the one case that would otherwise read as a failure -- a
+    // selection that vanished between arming and the key press -- says so out
+    // loud. A successful copy stays silent.
     notify('Nothing selected — Ctrl+C was passed to the desktop', 'info', 2500);
     sendCtrlC();
     return;
@@ -398,7 +400,6 @@ vncContainer.addEventListener('keydown', async (e) => {
   selectionArmed = false;
   if (navigator.clipboard) navigator.clipboard.writeText(text).catch(() => {});
   setXClipboard(text);
-  notify('Selection copied to your clipboard', 'success', 2000);
 }, true);
 
 // AltGr characters the browser reported as their unshifted key instead of the
