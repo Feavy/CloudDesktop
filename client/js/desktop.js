@@ -5,6 +5,7 @@ import { altGrKeysym } from '/js/altgr.js?cv=%CACHE_VERSION%';
 import { createRemoteAudio } from '/js/audio.js?cv=%CACHE_VERSION%';
 import { initAppDock, hideAppDock, setAppDockAutoHide, setCanInstallDeb, iconUrl } from '/js/appdock.js?cv=%CACHE_VERSION%';
 import { sendRestartShortcut } from '/js/session-restart.js?cv=%CACHE_VERSION%';
+import { readLocalClipboard } from '/js/local-clipboard.js?cv=%CACHE_VERSION%';
 
 const statusOverlay = document.getElementById('status-overlay');
 const statusText    = document.getElementById('status-text');
@@ -123,7 +124,12 @@ function hideStatus()    { statusOverlay.classList.add('hidden'); }
 // VNC → browser: when VNC clipboard changes, write to browser clipboard
 function onVncClipboard(e) {
   const text = e.detail.text;
-  if (navigator.clipboard && text) navigator.clipboard.writeText(text).catch(() => {});
+  // A NUL byte is in every image payload and in no clipboard text: a server
+  // that forwards an image selection as cut text would otherwise put those
+  // bytes into the local clipboard as if they were a string.
+  if (navigator.clipboard && text && !text.includes('\0')) {
+    navigator.clipboard.writeText(text).catch(() => {});
+  }
 }
 
 // Push text to an X selection via API. CLIPBOARD is what Ctrl+V reads in a
@@ -137,16 +143,43 @@ function setXClipboard(text, selection = 'clipboard') {
   }).catch(() => {});
 }
 
+// Push an image to the remote X CLIPBOARD. PNG is the type the server stores
+// the selection under, and noVNC has nothing to do with it: the extended
+// clipboard protocol carries text only, so the image exists for the remote
+// applications to paste and is never announced to the browser.
+function setXClipboardImage(png) {
+  return fetch('/api/desktop/clipboard/image', {
+    method: 'POST', credentials: 'same-origin',
+    headers: { 'Content-Type': 'image/png' },
+    body: png,
+  }).catch(() => {});
+}
+
+// Hand text to the remote: the VNC clipboard -- which keeps noVNC's answer to
+// a server-side request fresh -- plus the X selections the paste chord reads.
+async function pushText(text, alsoPrimary) {
+  if (alsoPrimary) rfb.clipboardPasteFrom(text);
+  await setXClipboard(text);
+  if (alsoPrimary) await setXClipboard(text, 'primary');
+}
+
 // Read local clipboard and push it to the remote (VNC protocol + X server).
 // Must be called from a user gesture, or the browser denies the read.
 // Returns the text that was pushed, or '' if nothing was read.
 //
 // A paste has to satisfy both X selections: CLIPBOARD is what Ctrl+V reads in
 // a text editor, PRIMARY is what a terminal's Shift+Insert and a middle click
-// read. So the paste paths write both -- clipboardPasteFrom hands the text to
-// the server's own clipboard (and keeps noVNC's answer to a server-side request
+// read. So the paste paths write both -- pushText hands the text to the
+// server's own clipboard (and keeps noVNC's answer to a server-side request
 // fresh), while the xclip writes take ownership synchronously, so the replayed
 // paste chord cannot outrun them.
+//
+// An image in the clipboard wins over the text beside it: a copy from a web
+// page carries both, and pasting alt text where the picture was meant is never
+// what was wanted. It goes to CLIPBOARD alone -- what a GUI toolkit or a
+// browser pastes -- and, since a terminal's Shift+Insert reads PRIMARY as
+// text, that selection is emptied: leaving the previously selected text there
+// would paste it in the image's place.
 //
 // Only the paths that are about to consume the selection may take PRIMARY:
 // claiming it makes the application that owned it drop its selection, so a
@@ -154,13 +187,26 @@ function setXClipboard(text, selection = 'clipboard') {
 // menu is about to act on. Right-click therefore refreshes CLIPBOARD alone.
 async function pushLocalClipboard(alsoPrimary = true) {
   if (!rfb) return '';
+
+  const clip = await readLocalClipboard();
+  if (clip) {
+    if (clip.image) {
+      await setXClipboardImage(clip.image);
+      if (alsoPrimary) await setXClipboard('', 'primary');
+      return clip.text || '';
+    }
+    if (clip.text) {
+      await pushText(clip.text, alsoPrimary);
+      return clip.text;
+    }
+  }
+
+  // Nothing listable to read, or nothing usable in it -- an older browser, a
+  // refused read, a clipboard holding only a type that is not pasted here. The
+  // text-only API is the whole clipboard in those cases.
   try {
     const text = await navigator.clipboard.readText();
-    if (text) {
-      if (alsoPrimary) rfb.clipboardPasteFrom(text);
-      await setXClipboard(text);
-      if (alsoPrimary) await setXClipboard(text, 'primary');
-    }
+    if (text) await pushText(text, alsoPrimary);
     return text;
   } catch { return ''; /* clipboard permission denied */ }
 }
@@ -174,7 +220,9 @@ async function pushLocalClipboard(alsoPrimary = true) {
 // literally, which is exactly the ^V the terminal printed. Shift+Insert is
 // the one chord that pastes in both worlds: VTE binds it to paste (reading
 // PRIMARY), GTK binds it to paste-clipboard, and the push below writes both
-// X selections, so either consumer gets the same text.
+// X selections, so either consumer gets the same text. An image is the one
+// exception: it can only be pasted by a toolkit or a browser, so it is written
+// to CLIPBOARD and PRIMARY is emptied instead (see pushLocalClipboard).
 //
 // The modifiers the user is still holding are released first: noVNC already
 // forwarded the physical Control keydown, so a replayed Shift+Insert under it

@@ -328,12 +328,91 @@ router.post('/clipboard', (req, res) => {
   });
 });
 
+// ── Clipboard: images ──────────────────────────────────────
+//
+// The X clipboard carries an image as a MIME-typed selection, not as text, so
+// it needs a target the endpoint above cannot express: the bytes are handed to
+// xclip with `-t image/png`, and X clients that paste an image ask the
+// selection owner for exactly that target. PNG is the one type every paste
+// target on the desktop reads -- Chromium, GTK, Qt and LibreOffice all request
+// it -- which is why the browser re-encodes anything else before sending it
+// here rather than advertising a type the application may not understand.
+//
+// CLIPBOARD alone. An image is pasted by a GUI toolkit or a browser, and both
+// read CLIPBOARD; PRIMARY is the selection a terminal's Shift+Insert consumes
+// as text. The client empties PRIMARY alongside this push so that chord cannot
+// paste whatever text was selected before instead (see desktop.js).
+const PNG_MAGIC = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
+
+// POST /api/desktop/clipboard/image
+//
+// The body is the image itself, with Content-Type: image/png. A body that is
+// not a PNG is refused rather than stored: the selection would advertise
+// image/png and every application pasting it would fail to decode.
+router.post('/clipboard/image',
+  express.raw({ type: 'image/png', limit: '25mb' }),
+  (req, res) => {
+    const png = req.body;
+    if (!Buffer.isBuffer(png) || png.length <= PNG_MAGIC.length ||
+        !png.subarray(0, PNG_MAGIC.length).equals(PNG_MAGIC)) {
+      return res.status(400).json({ error: 'PNG data required' });
+    }
+
+    // Same shape as the text write below, and for the same reason: xclip forks
+    // a background process that owns the selection, so 'exit' is the event that
+    // means the data is in place -- waiting for 'close' would wait for the
+    // owner to give the selection up.
+    const proc = spawn('xclip', ['-selection', 'clipboard', '-t', 'image/png'], {
+      env: X_ENV,
+      stdio: ['pipe', 'ignore', 'ignore'],
+    });
+
+    proc.on('exit', (code) => {
+      if (code !== 0) {
+        return res.status(500).json({ error: 'Failed to set clipboard' });
+      }
+      res.json({ ok: true });
+    });
+
+    proc.on('error', () => {
+      res.status(500).json({ error: 'xclip not available' });
+    });
+
+    // A multi-megabyte screenshot can outlive xclip's own exit, and the EPIPE
+    // that follows must not take the process down.
+    proc.stdin.on('error', () => {});
+    proc.stdin.end(png);
+  });
+
 // GET /api/desktop/clipboard
 //
 // ?selection=primary reads the X PRIMARY selection instead of CLIPBOARD. The
 // web client asks for it when the user presses Ctrl+C over a selection: the
 // selection lives in PRIMARY, which is exactly the selection the VNC clipboard
 // stream no longer carries now that Xtigervnc runs with -SendPrimary=0.
+//
+// Signatures of the image formats a selection realistically holds. `xclip -o`
+// hands the owner's bytes over whatever target is asked for, so a selection
+// that holds an image -- a region selected in GIMP lands in PRIMARY as a PNG,
+// and the image endpoint above puts one in CLIPBOARD -- would otherwise be
+// passed on as text. The client would then write megabytes of PNG into the
+// browser clipboard as if it were a string, and the Ctrl+C path would decide
+// it had copied something instead of replaying the keystroke. Answering with
+// "nothing" is what makes those paths behave as if no text were selected.
+const IMAGE_SIGNATURES = [
+  PNG_MAGIC,                                  // PNG
+  Buffer.from([0xff, 0xd8, 0xff]),            // JPEG
+  Buffer.from('GIF87a', 'latin1'),            // GIF
+  Buffer.from('GIF89a', 'latin1'),
+  Buffer.from([0x49, 0x49, 0x2a, 0x00]),      // TIFF, little endian
+  Buffer.from([0x4d, 0x4d, 0x00, 0x2a]),      // TIFF, big endian
+];
+
+function looksLikeImage(buf) {
+  if (!Buffer.isBuffer(buf) || buf.length < 4) return false;
+  return IMAGE_SIGNATURES.some((sig) => buf.subarray(0, sig.length).equals(sig));
+}
+
 router.get('/clipboard', (req, res) => {
   const selection = req.query.selection === 'primary' ? 'primary' : 'clipboard';
 
@@ -342,15 +421,16 @@ router.get('/clipboard', (req, res) => {
     // An owner that never answers must not hang the request: the client
     // replays Ctrl+C when this fails, and a hung request would hang that.
     timeout: 2000,
+    encoding: 'buffer',
   }, (err, stdout) => {
     // The selections change constantly; a cached answer would replay a stale
     // selection -- or worse, a stale "nothing selected" verdict, which is
     // what decides whether Ctrl+C copies or interrupts.
     res.set('Cache-Control', 'no-store');
-    if (err) {
+    if (err || looksLikeImage(stdout)) {
       return res.json({ text: '' });
     }
-    res.json({ text: stdout });
+    res.json({ text: stdout.toString('utf8') });
   });
 });
 

@@ -403,6 +403,19 @@ middle click pushes too, and only the pastes take PRIMARY (`SetPrimary` keeps
 its default) — a right-click pushes CLIPBOARD alone, because taking PRIMARY
 would clear the very selection the context menu is about to act on.
 
+Pasting an image works the same way. An image is not text, so it cannot ride the
+extended clipboard protocol (which carries text only) — the browser reads it with
+`navigator.clipboard.read()`, re-encodes anything that is not already a PNG through
+a canvas, and posts it to `POST /api/desktop/clipboard/image`, which hands the
+bytes to `xclip -t image/png`. The X CLIPBOARD selection itself then advertises
+`image/png`, which is what a GUI toolkit or a browser asks for when it pastes; GTK,
+Qt, Chromium and LibreOffice all read it. Only CLIPBOARD is written: PRIMARY is the
+selection a terminal's Shift+Insert reads *as text*, so it is emptied instead —
+leaving the previous selection there would paste that text where the image was
+meant. The image is never announced to the browser (nothing about it goes over
+VNC), so the local clipboard keeps whatever it had. An image copied *out of* the
+desktop is still not supported, for the same reason: the VNC clipboard is text.
+
 Ctrl+C is intercepted when something is selected. The client cannot ask the
 remote whether anything is selected, so it tracks the gestures that create one —
 a drag, a double or triple click, a Shift+click, Shift+arrows — and the ones
@@ -756,7 +769,8 @@ All routes are unauthenticated; the reverse proxy gates them.
 |---|---|---|
 | `GET` | `/health` | Liveness/readiness |
 | `GET` | `/api/desktop/config` | Home dir, VNC endpoint, which dock actions are available |
-| `GET`/`POST` | `/api/desktop/clipboard` | Read/write the X clipboard |
+| `GET`/`POST` | `/api/desktop/clipboard` | Read/write the X clipboard (text; a selection holding an image reads as empty) |
+| `POST` | `/api/desktop/clipboard/image` | Write a PNG to the X CLIPBOARD selection (`Content-Type: image/png`) |
 | `POST` | `/api/desktop/resolution` | Set the X display size, generating a modeline with `cvt` if needed |
 | `POST` | `/api/desktop/restart` | Restart the pod (the process exits so the runtime restarts it); `409` when the desktop is a separate container (the browser restarts it over VNC), runs `RESTART_CMD` outside a container, `501` if neither |
 | `GET` | `/api/desktop/stats` | CPU / RAM / disk |
