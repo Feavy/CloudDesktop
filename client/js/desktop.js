@@ -176,10 +176,18 @@ async function setXClipboardImage(png) {
 
 // Hand text to the remote: the VNC clipboard -- which keeps noVNC's answer to
 // a server-side request fresh -- plus the X selections the paste chord reads.
+//
+// The two selection writes go at once. They are independent of each other, and
+// each POST resolves only once its own selection is actually owned -- the
+// server answers on xclip's exit, and xclip's parent exits only after the
+// forked child has taken the selection. Awaiting them together is therefore
+// what lets the replayed chord rely on the push having landed; a fixed delay
+// after this call would only add latency (see the Ctrl+V handler).
 async function pushText(text, alsoPrimary) {
   if (alsoPrimary) rfb.clipboardPasteFrom(text);
-  await setXClipboard(text);
-  if (alsoPrimary) await setXClipboard(text, 'primary');
+  const writes = [setXClipboard(text)];
+  if (alsoPrimary) writes.push(setXClipboard(text, 'primary'));
+  await Promise.all(writes);
 }
 
 // Read local clipboard and push it to the remote (VNC protocol + X server).
@@ -190,8 +198,8 @@ async function pushText(text, alsoPrimary) {
 // a text editor, PRIMARY is what a terminal's Shift+Insert and a middle click
 // read. So the paste paths write both -- pushText hands the text to the
 // server's own clipboard (and keeps noVNC's answer to a server-side request
-// fresh), while the xclip writes take ownership synchronously, so the replayed
-// paste chord cannot outrun them.
+// fresh), while the awaited xclip writes leave each selection owned before this
+// resolves, so the replayed paste chord cannot outrun them.
 //
 // An image in the clipboard wins over the text beside it: a copy from a web
 // page carries both, and pasting alt text where the picture was meant is never
@@ -256,11 +264,13 @@ vncContainer.addEventListener('keydown', async (e) => {
     e.stopPropagation();
     e.stopImmediatePropagation();
 
+    // No fixed delay follows this: every push it makes is awaited, and each
+    // one resolves only once the remote selection is actually owned (the server
+    // answers the clipboard POST on xclip's exit, and xclip's parent exits only
+    // after its forked child has taken the selection). The replayed chord
+    // therefore cannot outrun the push -- waiting longer only made every paste
+    // slower.
     await pushLocalClipboard();
-
-    // Small delay to ensure the pushes above own the selections before the
-    // paste lands.
-    await new Promise(r => setTimeout(r, 80));
 
     // Ctrl+V itself. Replayed even when nothing was read: the remote's own
     // clipboard is what gets pasted then, and silently swallowing the
