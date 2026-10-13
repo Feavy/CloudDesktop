@@ -236,22 +236,15 @@ async function pushLocalClipboard(alsoPrimary = true) {
   } catch { return ''; /* clipboard permission denied */ }
 }
 
-// Ctrl+V: intercept BEFORE noVNC, set X clipboard, wait, then replay a paste
+// Ctrl+V: intercept BEFORE noVNC, set X clipboard, wait, then replay the chord
 //
-// The replay is Shift+Insert, not Ctrl+V, and that is the whole fix for
-// "Ctrl+V types ^V in the terminal": Ctrl+V is a paste in GTK and Electron
-// text fields, but a VTE terminal never sees it as one -- it is
-// quoted-insert, the chord that makes the shell take the next character
-// literally, which is exactly the ^V the terminal printed. Shift+Insert is
-// the one chord that pastes in both worlds: VTE binds it to paste (reading
-// PRIMARY), GTK binds it to paste-clipboard, and the push below writes both
-// X selections, so either consumer gets the same text. An image is the one
-// exception: it can only be pasted by a toolkit or a browser, so it is written
-// to CLIPBOARD and PRIMARY is emptied instead (see pushLocalClipboard).
-//
-// The modifiers the user is still holding are released first: noVNC already
-// forwarded the physical Control keydown, so a replayed Shift+Insert under it
-// would arrive as Ctrl+Shift+Insert, which nothing binds to a paste.
+// The replay is Ctrl+V, the chord the user pressed. Shift+Insert was tried here
+// and reverted: a VTE terminal never binds Ctrl+V -- there it is quoted-insert,
+// which is the ^V a terminal prints -- but Shift+Insert is unbound in enough
+// applications that replaying it took their paste away entirely, and a paste
+// that does nothing in a text field costs more than a terminal needing its
+// context menu. So Ctrl+V pastes wherever Ctrl+V is a paste; in a terminal the
+// context menu, or Ctrl+Shift+V, which VTE does bind, is the way.
 vncContainer.addEventListener('keydown', async (e) => {
   if (!rfb) return;
   if ((e.ctrlKey || e.metaKey) && (e.key === 'v' || e.key === 'V')) {
@@ -265,20 +258,18 @@ vncContainer.addEventListener('keydown', async (e) => {
 
     await pushLocalClipboard();
 
-    // Small delay to ensure the xclip writes above own the selections before
-    // the paste lands.
+    // Small delay to ensure the pushes above own the selections before the
+    // paste lands.
     await new Promise(r => setTimeout(r, 80));
 
-    if (e.ctrlKey) rfb.sendKey(0xFFE3, 'ControlLeft', false);
-    if (e.metaKey) rfb.sendKey(0xFFE7, 'MetaLeft', false);
-
-    // Shift+Insert. Replayed even when nothing was read: the remote's own
+    // Ctrl+V itself. Replayed even when nothing was read: the remote's own
     // clipboard is what gets pasted then, and silently swallowing the
-    // keystroke would leave Ctrl+V doing nothing at all.
-    rfb.sendKey(0xFFE1, 'ShiftLeft', true);
-    rfb.sendKey(0xFF63, 'Insert', true);
-    rfb.sendKey(0xFF63, 'Insert', false);
-    rfb.sendKey(0xFFE1, 'ShiftLeft', false);
+    // keystroke would leave Ctrl+V doing nothing at all -- an image-only
+    // clipboard, which carries no text to return, counts on this too.
+    rfb.sendKey(0xFFE3, 'ControlLeft', true);
+    rfb.sendKey(0x0076, 'KeyV', true);
+    rfb.sendKey(0x0076, 'KeyV', false);
+    rfb.sendKey(0xFFE3, 'ControlLeft', false);
   }
 }, true);
 

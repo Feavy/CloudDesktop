@@ -394,14 +394,19 @@ overwrite the local clipboard each time you selected anything.
 
 Pasting into the desktop starts from the browser clipboard instead: Ctrl+V is
 intercepted, the local clipboard is pushed to *both* X selections and then
-replayed as **Shift+Insert**. The chord matters: Ctrl+V is a paste in GTK and
-Electron text fields, but a VTE terminal never binds it — there it is
-quoted-insert, which is why a terminal prints `^V` and waits for the next
-character. Shift+Insert is the one chord that pastes everywhere: VTE reads
-PRIMARY with it, GTK reads CLIPBOARD, and both were just written. A right or
-middle click pushes too, and only the pastes take PRIMARY (`SetPrimary` keeps
-its default) — a right-click pushes CLIPBOARD alone, because taking PRIMARY
-would clear the very selection the context menu is about to act on.
+replayed as **Ctrl+V itself**. A right or middle click pushes too, and only the
+pastes take PRIMARY (`SetPrimary` keeps its default) — a right-click pushes
+CLIPBOARD alone, because taking PRIMARY would clear the very selection the
+context menu is about to act on.
+
+The chord is a deliberate trade-off, and a terminal is the side it accepts.
+Ctrl+V is a paste in GTK, Electron and browser text fields; a VTE terminal never
+binds it — there it is quoted-insert, so a terminal prints `^V` and waits for
+the next character, and pasting there is the context menu's job, or Ctrl+Shift+V,
+which VTE does bind. Replaying Shift+Insert instead, which both worlds bind, was
+tried and reverted: enough applications leave that chord unbound that they lost
+their paste entirely, and a text field where Ctrl+V does nothing costs more than
+a terminal needing its own way to paste.
 
 Pasting an image works the same way. An image is not text, so it cannot ride the
 extended clipboard protocol (which carries text only) — the browser reads it with
