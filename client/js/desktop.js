@@ -979,34 +979,114 @@ if (versionCaption) {
 }
 
 // ── Resolution modal ────────────────────────────────────────
+//
+// The modal holds two kinds of control: the resolution presets, which are a
+// one-shot action, and the Fit Factor / Font Size / DPI settings, which are
+// remembered choices. Applying either keeps the modal open -- the readout at
+// the top of the preset grid is the confirmation, and closing on a preset but
+// not on a setting was the least predictable part of the old modal.
 
 const resolutionModal = document.getElementById('resolution-modal');
+const resCurrentValue = document.getElementById('res-current-value');
+const resButtons = [...document.querySelectorAll('.res-btn')];
+
+// The size the desktop is at, as far as this file knows: the last size a
+// request settled on, adopted by setResolution below. It is the fallback for
+// the moment between a request and noVNC learning about it, and the only
+// value there is before the first connect.
+let lastKnownResolution = null;
+
+// The remote framebuffer size, which is the desktop's real size. This is the
+// one place the client reads a noVNC private field: there is no public getter
+// and no event on a size change, and the size has to come from noVNC rather
+// than from a value remembered here, because with resizeSession on for a
+// non-touch client noVNC resizes the session itself when the canvas changes --
+// so the desktop can move without any of the code below running.
+function framebufferResolution() {
+  if (rfb && rfb._fbWidth > 0 && rfb._fbHeight > 0) {
+    return { width: rfb._fbWidth, height: rfb._fbHeight };
+  }
+  return lastKnownResolution;
+}
+
+// Highlight the preset that matches the size, if any. Fit Window (0x0) is a
+// request for a size rather than a size, so it never matches: the readout is
+// what says where the desktop is, and the grid only says which preset would
+// ask for it again.
+function selectResBtn(w, h) {
+  resButtons.forEach((b) => {
+    b.classList.toggle('selected',
+      parseInt(b.dataset.w, 10) === w && parseInt(b.dataset.h, 10) === h);
+  });
+}
+
+// Record the size the desktop is now at and show it. Every path that changes
+// the resolution ends here -- a preset click, a Fit Window, the connect-time
+// auto-fit -- so the readout and the highlight always report the same fact.
+function setResolution(w, h) {
+  if (!Number.isFinite(w) || !Number.isFinite(h) || w <= 0 || h <= 0) return;
+  lastKnownResolution = { width: w, height: h };
+  if (resCurrentValue) resCurrentValue.textContent = `${w} × ${h}`;
+  selectResBtn(w, h);
+}
+
+// Re-read the size from noVNC. Called when the modal opens rather than only
+// when a button here is pressed: the desktop can have been re-fitted by a
+// browser resize since, and an open modal should never report a size the
+// desktop has stopped being at.
+function refreshResolutionReadout() {
+  const size = framebufferResolution();
+  if (size) setResolution(size.width, size.height);
+}
 
 document.getElementById('btn-resolution').addEventListener('click', () => {
   resolutionModal.hidden = false;
+  refreshResolutionReadout();
 });
 document.getElementById('resolution-close').addEventListener('click', () => {
   resolutionModal.hidden = true;
 });
 
-document.querySelectorAll('.res-btn').forEach((btn) => {
+resButtons.forEach((btn) => {
   btn.addEventListener('click', async () => {
-    let w = parseInt(btn.dataset.w, 10);
-    let h = parseInt(btn.dataset.h, 10);
+    const w = parseInt(btn.dataset.w, 10);
+    const h = parseInt(btn.dataset.h, 10);
+
+    // Fit Window names no size of its own: autoFitResolution measures the
+    // canvas and reports what it settled on through setResolution, so there is
+    // nothing to record here.
     if (w === 0 && h === 0) {
       autoFitResolution();
-      resolutionModal.hidden = true;
       return;
     }
+
+    let applied = { width: w, height: h };
     try {
-      await fetch('/api/desktop/resolution', {
+      const r = await fetch('/api/desktop/resolution', {
         method: 'POST', credentials: 'same-origin',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ width: w, height: h }),
       });
-    } catch { /* silent */ }
-    selectResBtn(w, h);
-    resolutionModal.hidden = true;
+      const data = await r.json().catch(() => ({}));
+      if (!r.ok) {
+        // The server owns what a requested size can be turned into (it may
+        // have to build an xrandr mode for one it has not used), so its
+        // refusal is the useful message. The old handler swallowed this and
+        // closed as if the change had worked.
+        notify(data.error || 'Could not change the resolution', 'error');
+        return;
+      }
+      // It answers with the mode it set, and it owns the rail, so it is the
+      // authority on the size the readout shows.
+      if (data.width > 0 && data.height > 0) {
+        applied = { width: data.width, height: data.height };
+      }
+    } catch {
+      notify('Could not reach the desktop to change the resolution', 'error');
+      return;
+    }
+
+    setResolution(applied.width, applied.height);
   });
 });
 
@@ -1052,20 +1132,9 @@ let fitFactor = storedFitFactor();
 let fontChoice = storedChoice('font-size', Object.keys(FONT_SIZES), DEFAULT_FONT_SIZE);
 let dpiChoice = parseInt(storedChoice('dpi', DPI_CHOICES.map(String), String(DEFAULT_DPI)), 10);
 
-const resButtons = [...document.querySelectorAll('.res-btn')];
 const factorButtons = [...document.querySelectorAll('.seg-btn[data-factor]')];
 const fontButtons = [...document.querySelectorAll('.seg-btn[data-font]')];
 const dpiButtons = [...document.querySelectorAll('.seg-btn[data-dpi]')];
-
-// Only the fit button can be highlighted from here: a fixed preset is a
-// one-shot action whose outcome depends on what the server can do with it,
-// where these stay selected as the state of a setting.
-function selectResBtn(w, h) {
-  resButtons.forEach((b) => {
-    b.classList.toggle('selected',
-      parseInt(b.dataset.w, 10) === w && parseInt(b.dataset.h, 10) === h);
-  });
-}
 
 function updateFitFactorBtns() {
   factorButtons.forEach((b) => {
@@ -1231,7 +1300,7 @@ document.getElementById('resolution-reset').addEventListener('click', () => {
   applyTextSize();
 });
 
-selectResBtn(0, 0);
+refreshResolutionReadout();
 updateFitFactorBtns();
 updateAppearanceBtns(fontChoice, dpiChoice);
 syncAppearanceFromDesktop();
@@ -2273,7 +2342,13 @@ function autoFitResolution() {
     method: 'POST', credentials: 'same-origin',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ width: w, height: h }),
-  }).then(r => r.json()).catch(() => {});
+  }).then(r => r.json()).then((data) => {
+    // The server answers with the mode it set, which is what the resolution
+    // modal reports as "Current": the pair fitted above is only the request,
+    // and the rail can have trimmed it.
+    if (data && data.width > 0 && data.height > 0) setResolution(data.width, data.height);
+    return data;
+  }).catch(() => {});
 }
 
 // Auto-refit on fullscreen & orientation changes

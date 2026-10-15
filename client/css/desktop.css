@@ -526,21 +526,37 @@ body.mobile-fullscreen #vnc-container { inset: 0 !important; }
 .btn-ghost:hover { background: var(--dock-hover) !important; }
 .btn-ghost:active { transform: scale(0.97); }
 
+/* The card is tall enough now (subtitle, current-size readout, two-line
+   presets, footer) to overrun a short desktop window, where Done would run off
+   the bottom with no way back to it. Mobile already caps and scrolls the
+   bottom sheet, and its later rules win over this one. */
+.res-card { max-height: calc(100vh - 32px); overflow-y: auto; }
+
 /* Resolution grid */
 .res-grid {
   display: grid;
   grid-template-columns: 1fr 1fr;
   gap: 8px; margin-bottom: 2px;
 }
+/* Two lines per preset: the size, then what that size is. A column layout
+   keeps the note under the size instead of beside it, so every button is the
+   same height and the sizes line up down the grid. */
 .res-btn {
-  padding: 11px !important;
+  display: flex; flex-direction: column; gap: 1px;
+  padding: 9px 12px !important;
   background: var(--dock-item-bg) !important;
   border: 1px solid var(--border) !important;
   border-radius: 10px !important;
   color: var(--text) !important;
   font-size: 13px !important; font-weight: 500 !important;
+  text-align: left;
   cursor: pointer;
   transition: all 0.15s;
+}
+.res-btn-size { font-size: 13px; font-weight: 600; }
+.res-btn-note {
+  font-size: 11px; font-weight: 400;
+  color: var(--text-muted); line-height: 1.3;
 }
 .res-btn:hover {
   background: var(--accent-hover) !important;
@@ -548,27 +564,82 @@ body.mobile-fullscreen #vnc-container { inset: 0 !important; }
   color: var(--text-bright) !important;
 }
 .res-btn:active { transform: scale(0.96); }
-/* The chosen resolution keeps a highlight, unlike the fire-and-forget preset
-   buttons: the modal now also holds settings that stay where they are put. */
+/* The preset matching the size the desktop is actually at keeps a highlight.
+   It is set from that size (see refreshResolutionReadout), not from the last
+   button pressed: with Fit Window the desktop can be resized without this
+   modal, and a highlight that outlived the change would be a lie. */
 .res-btn.selected {
   background: var(--accent) !important;
   border-color: var(--accent) !important;
   color: #fff !important;
 }
+.res-btn.selected .res-btn-note { color: rgba(255, 255, 255, 0.8); }
+/* Fit Window asks for the window's own size rather than naming one, so it
+   takes a full row of the grid and reads as a different kind of choice. The
+   expand glyph says "this window" faster than the note under it does. */
+.res-btn-fit {
+  grid-column: 1 / -1;
+  flex-direction: row; align-items: center; gap: 10px;
+}
+.res-btn-icon { width: 18px; height: 18px; flex-shrink: 0; color: var(--text-muted); }
+.res-btn-text { display: flex; flex-direction: column; gap: 1px; }
+.res-btn:hover .res-btn-icon { color: var(--text-bright); }
+.res-btn.selected .res-btn-icon { color: #fff; }
 
-/* Resolution modal: appearance controls below the presets */
+/* Resolution modal: subtitle, current size, then the settings below the grid */
+.res-subtitle {
+  margin: -10px 0 0;
+  font-size: 12.5px; line-height: 1.45; color: var(--text-muted);
+}
 .res-section-header {
   font-size: 11px; font-weight: 600; color: var(--text-muted);
   text-transform: uppercase; letter-spacing: 0.06em;
   padding: 16px 0 2px; margin-top: 10px;
   border-top: 0.5px solid var(--border);
 }
+/* The first header follows the subtitle, where the section rule would read as
+   an underline on the introduction. */
+.res-section-first { border-top: none; padding-top: 14px; margin-top: 0; }
+
+/* The size the desktop is at right now. It leads the section in the muted
+   label style, so it reads as the state the presets act on rather than as one
+   more control beside them. */
+.res-current { display: flex; align-items: baseline; gap: 7px; margin: 0 0 9px; }
+.res-current-label {
+  font-size: 11px; font-weight: 600; color: var(--text-muted);
+  text-transform: uppercase; letter-spacing: 0.06em;
+}
+.res-current-value {
+  font-size: 14px; font-weight: 600; color: var(--text-bright);
+  font-variant-numeric: tabular-nums;
+}
+
 /* The preset grid's own bottom margin plus the first row's padding would
    otherwise leave too much air before the fit factor row. */
 .res-grid + .res-setting-row { padding-top: 6px; }
 .res-setting-row { padding: 10px 0; }
 .res-setting-row .setting-label { font-size: 13.5px; }
 .res-setting-row .setting-hint { display: block; margin: 2px 0 0; font-size: 11px; }
+/* The footer draws the rule that separates it from the settings, so the last
+   setting row must not draw a second one. The extra class also earns its
+   keep: the footer is a later div sibling, so `.setting-row:last-of-type`
+   no longer reaches this row. */
+.setting-row.res-setting-last { border-bottom: none; }
+
+/* Reset + Done. Their own rule and their place at the bottom keep the reset
+   away from the resolution grid, so it cannot be read as resetting the
+   selected resolution; the line above names exactly what it does restore. */
+.res-footer {
+  margin-top: 6px; padding-top: 14px;
+  border-top: 0.5px solid var(--border);
+}
+.res-footer-hint {
+  margin-bottom: 12px;
+  font-size: 11.5px; line-height: 1.45; color: var(--text-muted);
+}
+.res-footer-actions {
+  display: flex; align-items: center; justify-content: space-between; gap: 8px;
+}
 
 /* Segmented choice (fit factor, font size, DPI) */
 .seg-row {

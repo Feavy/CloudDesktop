@@ -293,15 +293,68 @@
 
   <!-- Resolution -->
   <div id="resolution-modal" class="modal" hidden>
-    <div class="modal-card">
-      <h3>Display Resolution</h3>
-      <div class="res-grid">
-        <button class="res-btn" data-w="1920" data-h="1080">1920 × 1080</button>
-        <button class="res-btn" data-w="1600" data-h="900">1600 × 900</button>
-        <button class="res-btn" data-w="1440" data-h="900">1440 × 900</button>
-        <button class="res-btn" data-w="1366" data-h="768">1366 × 768</button>
-        <button class="res-btn" data-w="1280" data-h="720">1280 × 720</button>
-        <button class="res-btn" data-w="0" data-h="0" id="res-fit">Fit Window</button>
+    <div class="modal-card res-card">
+      <h3>Display</h3>
+      <!-- The old title ("Display Resolution") named only the preset grid,
+           while the modal also holds text size and DPI, which change how big
+           the text is drawn rather than how many pixels there are. The
+           subtitle says what the two sections below actually hold. -->
+      <p class="res-subtitle">Choose how large the remote desktop is, and how large its text appears.</p>
+
+      <div class="res-section-header res-section-first">Resolution</div>
+      <!-- What the desktop is at right now. It leads the section because it
+           answers the question the modal exists for, instead of leaving the
+           user to work it out from which button looks pressed. Filled by
+           refreshResolutionReadout from noVNC's framebuffer size, which is the
+           only truthful source: with Fit Window the size can also change on a
+           browser resize, without any click in this modal. -->
+      <div class="res-current">
+        <span class="res-current-label">Current</span>
+        <span class="res-current-value" id="res-current-value" aria-live="polite">—</span>
+      </div>
+
+      <!-- Presets carry their aspect ratio and the name the size is usually
+           known by, so the numbers can be matched to a screen at a glance. -->
+      <div class="res-grid" role="group" aria-label="Resolution presets">
+        <button class="res-btn" data-w="1920" data-h="1080">
+          <span class="res-btn-size">1920 × 1080</span>
+          <span class="res-btn-note">16:9 · Full HD</span>
+        </button>
+        <button class="res-btn" data-w="1600" data-h="900">
+          <span class="res-btn-size">1600 × 900</span>
+          <span class="res-btn-note">16:9 · HD+</span>
+        </button>
+        <button class="res-btn" data-w="1440" data-h="900">
+          <span class="res-btn-size">1440 × 900</span>
+          <span class="res-btn-note">16:10 · WXGA+</span>
+        </button>
+        <button class="res-btn" data-w="1366" data-h="768">
+          <span class="res-btn-size">1366 × 768</span>
+          <span class="res-btn-note">16:9 · WXGA</span>
+        </button>
+        <button class="res-btn" data-w="1280" data-h="720">
+          <span class="res-btn-size">1280 × 720</span>
+          <span class="res-btn-note">16:9 · HD</span>
+        </button>
+        <!-- The one 4:3 size, for an old desktop or an app that insists on the
+             shape; it also fills the last cell of the 2-column grid. -->
+        <button class="res-btn" data-w="1024" data-h="768">
+          <span class="res-btn-size">1024 × 768</span>
+          <span class="res-btn-note">4:3 · XGA</span>
+        </button>
+        <!-- Spans the grid: it is a different kind of choice from the fixed
+             sizes above it -- a request for whatever this window is -- and
+             owning its own line says so. -->
+        <button class="res-btn res-btn-fit" data-w="0" data-h="0" id="res-fit">
+          <svg class="res-btn-icon" viewBox="0 0 20 20" fill="none" stroke="currentColor"
+               stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <path d="M7 3H3v4"/><path d="M13 3h4v4"/><path d="M7 17H3v-4"/><path d="M13 17h4v-4"/>
+          </svg>
+          <span class="res-btn-text">
+            <span class="res-btn-size">Fit Window</span>
+            <span class="res-btn-note">Match this browser window</span>
+          </span>
+        </button>
       </div>
 
       <!-- Which shape "Fit Window" asks for. The factor multiplies the fitted
@@ -313,7 +366,7 @@
            viewport the top factors converge on the same maximum. -->
       <div class="setting-row res-setting-row fit-factor-row">
         <span class="setting-label">Fit Factor
-          <span class="setting-hint">Fit Window size multiplier</span>
+          <span class="setting-hint">Detail for Fit Window</span>
         </span>
         <div class="seg-row seg-row-fit" role="group" aria-label="Fit factor">
           <button class="seg-btn" data-factor="1">×1</button>
@@ -330,7 +383,9 @@
            to the desktop on every connect. -->
       <div class="res-section-header">Text Size</div>
       <div class="setting-row res-setting-row">
-        <span class="setting-label">Font Size</span>
+        <span class="setting-label">Font Size
+          <span class="setting-hint">Desktop UI text</span>
+        </span>
         <div class="seg-row" role="group" aria-label="Font size">
           <button class="seg-btn" data-font="small">S</button>
           <button class="seg-btn" data-font="medium">M</button>
@@ -338,8 +393,10 @@
           <button class="seg-btn" data-font="xlarge">XL</button>
         </div>
       </div>
-      <div class="setting-row res-setting-row">
-        <span class="setting-label">DPI</span>
+      <div class="setting-row res-setting-row res-setting-last">
+        <span class="setting-label">DPI
+          <span class="setting-hint">Screen density</span>
+        </span>
         <div class="seg-row" role="group" aria-label="DPI">
           <button class="seg-btn" data-dpi="96">96</button>
           <button class="seg-btn" data-dpi="120">120</button>
@@ -351,16 +408,15 @@
       <!-- One control for the three remembered choices above -- Fit Factor,
            Font Size and DPI. The resolution presets are deliberately not part
            of it: those are a one-shot action, not a setting that stays where it
-           is put. The hint names what "reset" restores, so the button cannot be
-           read as resetting the resolution above it. -->
-      <div class="setting-row res-setting-row">
-        <span class="setting-label">Fit &amp; Text
-          <span class="setting-hint">Back to ×1, Medium, 96 DPI</span>
-        </span>
-        <button id="resolution-reset" class="btn-ghost">Reset</button>
+           is put. The line above the buttons names what Reset restores, so the
+           button cannot be read as resetting the resolution above it. -->
+      <div class="res-footer">
+        <p class="res-footer-hint">Reset restores Fit Factor ×1, Font Medium and 96 DPI. It leaves the resolution alone.</p>
+        <div class="res-footer-actions">
+          <button id="resolution-reset" class="btn-ghost">Reset</button>
+          <button id="resolution-close" class="btn-primary">Done</button>
+        </div>
       </div>
-
-      <button id="resolution-close" class="btn-ghost" style="margin-top:14px">Close</button>
     </div>
   </div>
 
