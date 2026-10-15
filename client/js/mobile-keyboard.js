@@ -15,6 +15,15 @@
 //    viewport, and noVNC would otherwise resize the whole remote desktop to
 //    match, re-flowing every window each time the keyboard opens or closes.
 //
+// The off-screen input is a scratch pad, not a document. What the soft keyboard
+// puts in it is read once and mirrored to the remote, and the field is emptied
+// again so the next key finds it empty. It does not always stay empty: an IME
+// mid-composition puts its text back. That is where Backspace goes wrong --
+// while there is text in the field the keyboard deletes *there* and tells us
+// nothing, so the remote only starts deleting once the local buffer has been
+// drained, one press per character already typed. An input event is therefore
+// read as an insertion or a deletion, and either way is mirrored to the remote.
+//
 // Closing is the hard half. The OS does not tear the keyboard down when we
 // blur the input: it plays an animation over a few hundred milliseconds and
 // grows the viewport back in steps, firing a resize event for each. Re-enabling
@@ -86,6 +95,18 @@ export function createMobileKeyboard({ getRfb, onOpenChange, onWillOpen }) {
   // Text the keydown path already sent, so the input/composition fallback below
   // does not send the same characters a second time.
   let recentlySent = '';
+  // What the off-screen input held just before the change the pending input
+  // event is reporting. beforeinput reports that with the field untouched, and
+  // a keydown runs before any IME insert or delete, so either leaves the
+  // pre-change value here for onInput to read the direction of the change from.
+  // `preInputTrusted` records that it came from beforeinput, which is what
+  // makes a shorter value conclusive rather than a guess.
+  let preInput = null;
+  let preInputTrusted = false;
+  // True when the keydown just forwarded a Backspace/Delete itself, so the
+  // input event that follows -- when the keyboard also deleted locally -- is
+  // not mirrored a second time.
+  let deletedOnKeyDown = false;
   // Keys we have pressed but not yet released, so a keyboard that vanishes
   // mid-press cannot leave a modifier stuck down on the remote desktop.
   const held = new Map();
@@ -126,9 +147,19 @@ export function createMobileKeyboard({ getRfb, onOpenChange, onWillOpen }) {
 
     input.addEventListener('keydown', onKeyDown);
     input.addEventListener('keyup', onKeyUp);
+    input.addEventListener('beforeinput', onBeforeInput);
     input.addEventListener('input', onInput);
     input.addEventListener('blur', onInputBlur);
     return input;
+  }
+
+  // The field as it is with the next change not applied yet. beforeinput is the
+  // one event that reports that reliably: by the time `input` fires the IME may
+  // have put its text back after we emptied the field, and the value alone no
+  // longer says which way the change went.
+  function onBeforeInput() {
+    preInput = input.value;
+    preInputTrusted = true;
   }
 
   // The OS dismisses the soft keyboard on its own all the time -- Android's back
@@ -348,6 +379,12 @@ export function createMobileKeyboard({ getRfb, onOpenChange, onWillOpen }) {
     const code = KeyboardUtil.getKeycode(e);
     const keysym = KeyboardUtil.getKeysym(e);
 
+    // Before the keyboard gets to touch it: an IME inserts or deletes right
+    // after keydown, and this is what tells the input event that follows which
+    // way the field changed.
+    preInput = input.value;
+    preInputTrusted = false;
+
     // A virtual keyboard with no key info still tells us the character, so send
     // it as an instant tap. Matches what noVNC does for unidentified keys.
     if (keysym === null) {
@@ -361,6 +398,9 @@ export function createMobileKeyboard({ getRfb, onOpenChange, onWillOpen }) {
     }
 
     if (e.key && e.key.length === 1) remember(e.key);
+    // A Backspace/Delete that reached us as a key is forwarded here; if the
+    // keyboard then also deletes locally, onInput must not mirror it again.
+    deletedOnKeyDown = keysym === KeyTable.XK_BackSpace || keysym === KeyTable.XK_Delete;
     held.set(code, keysym);
     sendKey(keysym, code, true, mod(e, 'CapsLock'), mod(e, 'NumLock'));
     releaseLatchedExcept(code);
@@ -381,19 +421,62 @@ export function createMobileKeyboard({ getRfb, onOpenChange, onWillOpen }) {
   }
 
   // Autocorrect, swipe typing and IME composition insert text without ever
-  // delivering a usable keydown. Whatever lands in the input is therefore sent
-  // as taps, minus anything the keydown path already reported.
-  function onInput() {
+  // delivering a usable keydown, and the soft keyboard deletes out of this field
+  // rather than sending a Backspace whenever there is something there to delete.
+  // Both are read from the change itself: `preInput` is what the field held
+  // before it, so a longer value is text to type and a shorter one a deletion to
+  // mirror. See the note at the top of the file.
+  function onInput(e) {
     const rfb = getRfb();
+    const before = preInput ?? '';
+    const trusted = preInputTrusted;
     const typed = input.value;
+    preInput = null;
+    preInputTrusted = false;
+    // Empty the scratch pad again, so the next Backspace finds nothing here to
+    // delete and reaches us as a key instead.
     input.value = '';
-    if (!rfb || !typed) return;
 
-    let text = typed;
+    // The keyboard took characters out of the field itself. The field mirrors
+    // what the remote has already been sent, so the removal has to be mirrored
+    // too, or Backspace looks dead until the local buffer runs out -- one press
+    // per character already typed. A word or a held key can go at once, hence
+    // the count. A shorter value is only a deletion when the rest is the same
+    // text: autocorrect replaces a word with another one, and that is typing.
+    // `trusted` says beforeinput reported the field before the change, and the
+    // event's inputType says outright what happened; without either, a shorter
+    // value is not conclusive and is left alone.
+    const inputType = e?.inputType || '';
+    const shrank = before.length > typed.length &&
+      (before.startsWith(typed) || before.endsWith(typed));
+    if (shrank && (trusted || inputType.startsWith('delete') || deletedOnKeyDown)) {
+      const alreadySent = deletedOnKeyDown;
+      deletedOnKeyDown = false;
+      // The key already reached us as a keydown and was forwarded there; this
+      // is the same press deleting locally, not a second one.
+      if (alreadySent || !rfb) return;
+      // Removing from the end of the field is Backspace; only a removal from
+      // the front is a forward Delete.
+      const forward = !before.startsWith(typed) || /Forward/.test(inputType);
+      const keysym = forward ? KeyTable.XK_Delete : KeyTable.XK_BackSpace;
+      const code = forward ? 'Delete' : 'Backspace';
+      for (let i = before.length - typed.length; i > 0; i--) {
+        sendKey(keysym, code, true, null, null);
+        sendKey(keysym, code, false, null, null);
+      }
+      releaseLatchedExcept(code);
+      return;
+    }
+
+    // Whatever reached the field without a usable keydown is sent as taps, minus
+    // anything the keydown path already reported.
+    deletedOnKeyDown = false;
+    if (!rfb || !typed) return;
+    let text = typed.startsWith(before) ? typed.slice(before.length) : typed;
     if (recentlySent) {
-      const n = Math.min(recentlySent.length, typed.length);
-      if (typed.slice(0, n) === recentlySent.slice(0, n)) {
-        text = typed.slice(n);
+      const n = Math.min(recentlySent.length, text.length);
+      if (text.slice(0, n) === recentlySent.slice(0, n)) {
+        text = text.slice(n);
         recentlySent = recentlySent.slice(n);
       } else {
         recentlySent = '';
@@ -555,6 +638,9 @@ export function createMobileKeyboard({ getRfb, onOpenChange, onWillOpen }) {
     latched.clear();
     updateLatchedUI();
     recentlySent = '';
+    preInput = null;
+    preInputTrusted = false;
+    deletedOnKeyDown = false;
     // Re-capture on every open: a reconnect may have handed us an RFB with a
     // different resizeSession setting.
     resumeResizeSession = null;
