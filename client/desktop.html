@@ -303,6 +303,47 @@
         <button class="res-btn" data-w="1280" data-h="720">1280 × 720</button>
         <button class="res-btn" data-w="0" data-h="0" id="res-fit">Fit Window</button>
       </div>
+
+      <!-- Which shape "Fit Window" asks for. The factor multiplies the fitted
+           size before it is sent to xrandr, so x2 buys a desktop with twice
+           the pixels (crisper, and roomier for the window manager) which
+           noVNC then scales back down into the canvas. It multiplies the
+           resolution, not the app scaling, so it is independent of Font Size
+           and DPI below. -->
+      <div class="setting-row res-setting-row">
+        <span class="setting-label">Fit Factor
+          <span class="setting-hint">Fit Window size multiplier</span>
+        </span>
+        <div class="seg-row" role="group" aria-label="Fit factor">
+          <button class="seg-btn" data-factor="1">×1</button>
+          <button class="seg-btn" data-factor="2">×2</button>
+        </div>
+      </div>
+
+      <!-- Font size and DPI are XFCE xsettings, not the resolution: the
+           desktop stays the same size and its text and widgets get bigger.
+           The choice is remembered per browser (localStorage) and re-applied
+           to the desktop on every connect. -->
+      <div class="res-section-header">Text Size</div>
+      <div class="setting-row res-setting-row">
+        <span class="setting-label">Font Size</span>
+        <div class="seg-row" role="group" aria-label="Font size">
+          <button class="seg-btn" data-font="small">S</button>
+          <button class="seg-btn" data-font="medium">M</button>
+          <button class="seg-btn" data-font="large">L</button>
+          <button class="seg-btn" data-font="xlarge">XL</button>
+        </div>
+      </div>
+      <div class="setting-row res-setting-row">
+        <span class="setting-label">DPI</span>
+        <div class="seg-row" role="group" aria-label="DPI">
+          <button class="seg-btn" data-dpi="96">96</button>
+          <button class="seg-btn" data-dpi="120">120</button>
+          <button class="seg-btn" data-dpi="144">144</button>
+          <button class="seg-btn" data-dpi="192">192</button>
+        </div>
+      </div>
+
       <button id="resolution-close" class="btn-ghost" style="margin-top:14px">Close</button>
     </div>
   </div>

@@ -237,6 +237,141 @@ router.post('/resolution', (req, res) => {
   });
 });
 
+// GET /api/desktop/appearance
+//
+// The client's Font Size and DPI controls, which are XFCE xsettings rather
+// than a resolution: /Gtk/FontName is the desktop's UI and monospace font, and
+// /Xft/DPI is the dots-per-inch Xft renders at. XFCE's xsettings daemon
+// watches this channel, so a change lands in the running applications without
+// a restart.
+//
+// This is deliberately separate from POST /resolution. A resolution changes
+// how many pixels the desktop has; these change how big the text drawn into
+// those pixels is, so the two do not fight: x2 + 96 DPI is a large, crisp
+// desktop, and 96 DPI at any resolution keeps the same text size relative to
+// the screen.
+//
+// The browser sends values it offers as presets, but the server validates them
+// anyway: this route hands its input to a command line, and a font name that
+// reaches xfconf-query unchecked is a command-line injection waiting to happen.
+// Only the point sizes below are accepted, so the request cannot name an
+// arbitrary font or an absurd DPI. The client's four buttons are a subset of
+// that list on purpose -- the rest are sizes the API accepts and a deployment
+// can drive without the client changing.
+const FONT_SIZES = [8, 9, 10, 11, 12, 13, 14, 16, 18, 20, 24];
+const DPI_MIN = 72, DPI_MAX = 240;
+// "Sans 10": a family (letters, digits, spaces, dashes) then a point size.
+// The family group is lazy so the last space is the one that separates the
+// two, and the separator is a literal space rather than \s -- \s also matched
+// the space before the size, which left "Sans 12" with nothing to match.
+const FONT_NAME_RE = /^([A-Za-z0-9][A-Za-z0-9 ._-]{0,60}?)[ ]+(\d{1,2})$/;
+
+function fontPointSize(name) {
+  const m = FONT_NAME_RE.exec(String(name || ''));
+  return m ? parseInt(m[2], 10) : null;
+}
+
+// The desktop's own font family, so a size change keeps the theme's choice.
+// Read at most once: xfconf-query is not free, and the family is not what this
+// route changes.
+let fontFamilyPromise = null;
+function fontFamily() {
+  if (!fontFamilyPromise) {
+    fontFamilyPromise = new Promise((resolve) => {
+      execFile('xfconf-query', ['-c', 'xsettings', '-p', '/Gtk/FontName'],
+        { env: X_ENV }, (err, stdout) => {
+          if (err) return resolve('Sans');
+          const m = /^(.+?)\s+\d{1,3}$/.exec(String(stdout).trim());
+          resolve(m ? m[1].trim() : 'Sans');
+        });
+    });
+  }
+  return fontFamilyPromise;
+}
+
+// xfconf-query needs the property's type to convert the value, and the wrong
+// one is not a silent no-op: "-s 'Sans 12' -t int" fails the write outright
+// ("cannot convert to gint"), which is how the font half of a request could
+// fail while the DPI half went through. Only the numeric value asks for a
+// type; a font name is written untyped, which is a string.
+function xfconfSet(property, value, type) {
+  const args = ['-c', 'xsettings', '-p', property, '-s', String(value)];
+  if (type) args.push('-t', type);
+  return new Promise((resolve) => {
+    execFile('xfconf-query', args, { env: X_ENV }, (err) => resolve(!err));
+  });
+}
+
+// One batched read of the xsettings channel: the client modal opens with the
+// desktop's current values, so a preference saved by another browser (or by
+// the desktop itself) shows up as the selected segment.
+function readXsettings() {
+  return new Promise((resolve) => {
+    execFile('xfconf-query', ['-c', 'xsettings', '-lv'],
+      { env: X_ENV, maxBuffer: 1024 * 1024 }, (err, stdout) => {
+        if (err) return resolve(null);
+        const out = {};
+        for (const line of String(stdout).split('\n')) {
+          const m = /^\s*(\S+)\s+(.*)$/.exec(line);
+          if (m) out[m[1]] = m[2].trim();
+        }
+        resolve(out);
+      });
+  });
+}
+
+router.get('/appearance', async (_req, res) => {
+  const settings = await readXsettings();
+  if (!settings) {
+    return res.status(503).json({ error: 'The desktop is not reachable to read its appearance' });
+  }
+  const dpi = parseInt(settings['/Xft/DPI'], 10);
+  res.json({
+    ok: true,
+    fontName: settings['/Gtk/FontName'] || '',
+    monospaceFontName: settings['/Gtk/MonospaceFontName'] || '',
+    fontPointSize: fontPointSize(settings['/Gtk/FontName']),
+    dpi: Number.isFinite(dpi) ? dpi : 96,
+  });
+});
+
+// POST /api/desktop/appearance — see the note above; the validation here is
+// what keeps a browser-supplied font name off the command line unchecked.
+router.post('/appearance', async (req, res) => {
+  const { fontName, dpi } = req.body || {};
+
+  if (typeof fontName !== 'string' || !fontName.trim()) {
+    return res.status(400).json({ error: 'A font name is required' });
+  }
+  const point = fontPointSize(fontName);
+  if (point === null || !FONT_SIZES.includes(point)) {
+    return res.status(400).json({
+      error: `Unsupported font: the point size must be one of ${FONT_SIZES.join(', ')}`,
+    });
+  }
+  const dpiNum = Number(dpi);
+  if (!Number.isInteger(dpiNum) || dpiNum < DPI_MIN || dpiNum > DPI_MAX) {
+    return res.status(400).json({ error: `DPI must be an integer between ${DPI_MIN} and ${DPI_MAX}` });
+  }
+
+  // A family change would be a different font, not a size; keep the desktop's
+  // own.
+  const family = await fontFamily();
+  const name = `${family} ${point}`;
+  const writes = [
+    ['/Gtk/FontName', name],
+    // Monospace follows the same size so terminals and editors scale with the
+    // rest of the UI.
+    ['/Gtk/MonospaceFontName', `Monospace ${point}`],
+    ['/Xft/DPI', dpiNum, 'int'],
+  ];
+  const results = await Promise.all(writes.map(([p, v, t]) => xfconfSet(p, v, t)));
+  if (results.some((okay) => !okay)) {
+    return res.status(502).json({ error: 'The desktop refused the appearance change' });
+  }
+  res.json({ ok: true, fontName: name, dpi: dpiNum });
+});
+
 // POST /api/desktop/restart
 //
 // Restarts the pod. Both shipped images run this web client as the process the

@@ -98,6 +98,12 @@ function onConnect() {
   hideStatus();
   rfb.focus();
   notify('Connected to desktop', 'success', 3000);
+  // The saved text size belongs to this browser, and the desktop may be a
+  // fresh one (a restarted pod, or a session someone else reset) that is back
+  // at 96 DPI. Re-assert the preference now that there is a desktop to take
+  // it. Fire and forget: a client-only image answers 503 and the setting is
+  // simply not applicable there.
+  applyTextSize({ quiet: true });
 }
 
 function onDisconnect(e) {
@@ -999,9 +1005,200 @@ document.querySelectorAll('.res-btn').forEach((btn) => {
         body: JSON.stringify({ width: w, height: h }),
       });
     } catch { /* silent */ }
+    selectResBtn(w, h);
     resolutionModal.hidden = true;
   });
 });
+
+// ── Resolution modal: fit factor, font size, DPI ────────────
+//
+// Two of the three are XFCE xsettings on the remote desktop (font size and
+// DPI, applied through /api/desktop/appearance) and one is this browser's fit
+// geometry (the factor applied by autoFitResolution below). The choices are
+// kept in localStorage, so they are per browser as asked, and re-applied to
+// the desktop on every connect: a pod restart, or a desktop whose session was
+// restarted, comes back at the X defaults otherwise.
+
+// The point sizes the four buttons ask for. The server accepts a wider set
+// (8-24); these are the ones a click can reach.
+const FONT_SIZES = { small: 9, medium: 10, large: 12, xlarge: 14 };
+const FONT_SIZE_LABELS = { small: 'Small', medium: 'Medium', large: 'Large', xlarge: 'Extra large' };
+const DEFAULT_FONT_SIZE = 'medium';
+const DPI_CHOICES = [96, 120, 144, 192];
+const DEFAULT_DPI = 96;
+
+function storedChoice(key, allowed, fallback) {
+  const v = localStorage.getItem(key);
+  return allowed.includes(v) ? v : fallback;
+}
+
+// Multiplier on the fitted size, guarded to something sane: autoFitResolution
+// multiplies with it, and a value of 0 or 500 from a hand-edited localStorage
+// would ask the server for a resolution it rejects.
+function storedFitFactor() {
+  const n = parseFloat(localStorage.getItem('fit-factor'));
+  return n === 1 || n === 2 ? n : 1;
+}
+
+let fitFactor = storedFitFactor();
+let fontChoice = storedChoice('font-size', Object.keys(FONT_SIZES), DEFAULT_FONT_SIZE);
+let dpiChoice = parseInt(storedChoice('dpi', DPI_CHOICES.map(String), String(DEFAULT_DPI)), 10);
+
+const resButtons = [...document.querySelectorAll('.res-btn')];
+const factorButtons = [...document.querySelectorAll('.seg-btn[data-factor]')];
+const fontButtons = [...document.querySelectorAll('.seg-btn[data-font]')];
+const dpiButtons = [...document.querySelectorAll('.seg-btn[data-dpi]')];
+
+// Only the fit button can be highlighted from here: a fixed preset is a
+// one-shot action whose outcome depends on what the server can do with it,
+// where these stay selected as the state of a setting.
+function selectResBtn(w, h) {
+  resButtons.forEach((b) => {
+    b.classList.toggle('selected',
+      parseInt(b.dataset.w, 10) === w && parseInt(b.dataset.h, 10) === h);
+  });
+}
+
+function updateFitFactorBtns() {
+  factorButtons.forEach((b) => {
+    b.classList.toggle('selected', parseFloat(b.dataset.factor) === fitFactor);
+  });
+}
+
+function updateAppearanceBtns(font, dpi) {
+  fontButtons.forEach((b) => b.classList.toggle('selected', b.dataset.font === font));
+  dpiButtons.forEach((b) => b.classList.toggle('selected', parseInt(b.dataset.dpi, 10) === dpi));
+}
+
+// The point size and DPI the desktop reports, or null when there is no desktop
+// to ask (the client-only image answers 503, and a desktop still starting
+// refuses the connection).
+async function readDesktopAppearance() {
+  try {
+    const r = await fetch('/api/desktop/appearance', { credentials: 'same-origin' });
+    if (!r.ok) return null;
+    const data = await r.json();
+    const point = Number(data.fontPointSize);
+    const dpi = Number(data.dpi);
+    if (!Number.isFinite(point) || !Number.isFinite(dpi)) return null;
+    return { point, dpi };
+  } catch {
+    return null;
+  }
+}
+
+// Whether the user has touched the appearance controls in this page. Until
+// they do, the desktop's own values fill the segments (see below); after, the
+// local choice is what the segments show, and a late-arriving read is stale.
+let appearanceTouched = false;
+
+// Reflects the desktop's values into the segments on load, so a browser with
+// no saved preference starts by showing what the desktop actually has.
+//
+// It deliberately does not write localStorage: the saved preference must stay
+// whatever the user chose, because applyTextSize() re-applies it on connect. A
+// started load fires a GET (here) and a re-apply (on connect) at once, and
+// letting the GET's older answer overwrite the preference was a real bug --
+// the saved font size flipped back to the desktop's old one and the click's
+// write was lost. Adopting the desktop's values in memory is fine only because
+// it happens before any preference exists.
+async function syncAppearanceFromDesktop() {
+  const desktop = await readDesktopAppearance();
+  // Checked again after the wait: a click during the round trip has already
+  // painted the segments, and this older answer must not undo it.
+  if (!desktop || appearanceTouched) return;
+
+  const hasStored = localStorage.getItem('font-size') !== null && localStorage.getItem('dpi') !== null;
+  if (hasStored) {
+    // There is a preference; show it, and let the connect re-apply assert it
+    // on a desktop that has since drifted.
+    updateAppearanceBtns(fontChoice, dpiChoice);
+    return;
+  }
+
+  const match = Object.keys(FONT_SIZES).find((k) => FONT_SIZES[k] === desktop.point);
+  fontChoice = match || fontChoice;
+  dpiChoice = desktop.dpi;
+  updateAppearanceBtns(match, desktop.dpi);
+}
+
+// Push this browser's saved text size to the desktop. The font name is built
+// server side from the desktop's own family and only the point size goes over
+// the wire, so there is no free-text font field to validate.
+async function applyTextSize({ quiet = false } = {}) {
+  // Any write means the local choice is now authoritative: a load-time read
+  // that lands after it must not repaint the segments with older values.
+  appearanceTouched = true;
+  const point = FONT_SIZES[fontChoice] || FONT_SIZES[DEFAULT_FONT_SIZE];
+
+  // Already there: writing it again would only cost a round trip and, on a
+  // reconnect to an unchanged desktop, a toast announcing nothing.
+  const current = await readDesktopAppearance();
+  if (current && current.point === point && current.dpi === dpiChoice) return;
+
+  try {
+    const r = await fetch('/api/desktop/appearance', {
+      method: 'POST', credentials: 'same-origin',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ fontName: `Sans ${point}`, dpi: dpiChoice }),
+    });
+    const data = await r.json().catch(() => ({}));
+    if (!r.ok) {
+      // A connect-time re-apply stays silent: a client-only image cannot take
+      // these settings at all, and a toast about it on every reconnect would
+      // be noise. A click is the user asking, so it gets an answer.
+      if (!quiet) notify(data.error || 'Could not change the desktop text size', 'error');
+      return;
+    }
+    if (quiet) return;
+    // The server answers with what it settled on (it owns the font family),
+    // which is what the desktop now shows.
+    notify(`Text size: ${FONT_SIZE_LABELS[fontChoice] || fontChoice} · ${data.dpi || dpiChoice} DPI`,
+      'success', 2500);
+  } catch {
+    if (!quiet) notify('Could not reach the desktop to change the text size', 'error');
+  }
+}
+
+factorButtons.forEach((btn) => {
+  btn.addEventListener('click', () => {
+    const next = parseFloat(btn.dataset.factor);
+    if (next === fitFactor) return;
+    fitFactor = next;
+    localStorage.setItem('fit-factor', String(fitFactor));
+    updateFitFactorBtns();
+    // Take effect now rather than on the next viewport change, which may be
+    // much later: a Fit Window click is the visible confirmation.
+    if (rfb) autoFitResolution();
+  });
+});
+
+// Font size and DPI move together in one write, so each field's click re-sends
+// the pair it can see.
+fontButtons.forEach((btn) => {
+  btn.addEventListener('click', () => {
+    appearanceTouched = true;
+    fontChoice = btn.dataset.font;
+    localStorage.setItem('font-size', fontChoice);
+    updateAppearanceBtns(fontChoice, dpiChoice);
+    applyTextSize();
+  });
+});
+
+dpiButtons.forEach((btn) => {
+  btn.addEventListener('click', () => {
+    appearanceTouched = true;
+    dpiChoice = parseInt(btn.dataset.dpi, 10);
+    localStorage.setItem('dpi', String(dpiChoice));
+    updateAppearanceBtns(fontChoice, dpiChoice);
+    applyTextSize();
+  });
+});
+
+selectResBtn(0, 0);
+updateFitFactorBtns();
+updateAppearanceBtns(fontChoice, dpiChoice);
+syncAppearanceFromDesktop();
 
 // ── Fit windows on screen ───────────────────────────────────
 
@@ -2003,6 +2200,15 @@ function autoFitResolution() {
   // Fit inside the bounds as a pair, so the aspect ratio survives. Shrink only;
   // growing a desktop beyond its own pixel size costs bandwidth and buys
   // nothing, and the HiDPI boost above is the one deliberate exception.
+  //
+  // The chosen factor then multiplies that fitted pair, and the bounds still
+  // cap it: x2 on a full-screen desktop is a denser desktop (noVNC scales it
+  // back down into the canvas) rather than one larger than the rail. It scales
+  // the resolution only -- font size and DPI are XFCE settings, applied
+  // separately -- so the two never both claim the same effect.
+  w *= fitFactor;
+  h *= fitFactor;
+
   let k = Math.min(1, MAX_RES_W / w, MAX_RES_H / h);
   // A container collapsed to a sliver mid-transition should still not ask the
   // server for a mode it will reject; grow back by the short edge if so, which

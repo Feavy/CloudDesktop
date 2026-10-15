@@ -548,6 +548,50 @@ body.mobile-fullscreen #vnc-container { inset: 0 !important; }
   color: var(--text-bright) !important;
 }
 .res-btn:active { transform: scale(0.96); }
+/* The chosen resolution keeps a highlight, unlike the fire-and-forget preset
+   buttons: the modal now also holds settings that stay where they are put. */
+.res-btn.selected {
+  background: var(--accent) !important;
+  border-color: var(--accent) !important;
+  color: #fff !important;
+}
+
+/* Resolution modal: appearance controls below the presets */
+.res-section-header {
+  font-size: 11px; font-weight: 600; color: var(--text-muted);
+  text-transform: uppercase; letter-spacing: 0.06em;
+  padding: 16px 0 2px; margin-top: 10px;
+  border-top: 0.5px solid var(--border);
+}
+/* The preset grid's own bottom margin plus the first row's padding would
+   otherwise leave too much air before the fit factor row. */
+.res-grid + .res-setting-row { padding-top: 6px; }
+.res-setting-row { padding: 10px 0; }
+.res-setting-row .setting-label { font-size: 13.5px; }
+.res-setting-row .setting-hint { display: block; margin: 2px 0 0; font-size: 11px; }
+
+/* Segmented choice (fit factor, font size, DPI) */
+.seg-row {
+  display: flex; gap: 4px; flex-shrink: 0;
+  background: var(--dock-item-bg);
+  border: 1px solid var(--border);
+  border-radius: 9px; padding: 3px;
+}
+.seg-btn {
+  min-width: 40px; padding: 5px 9px;
+  background: transparent !important;
+  border: none; border-radius: 6px;
+  color: var(--text-muted) !important;
+  font-size: 12.5px !important; font-weight: 600 !important;
+  cursor: pointer;
+  transition: all 0.15s;
+}
+.seg-btn:hover { color: var(--text-bright) !important; }
+.seg-btn.selected {
+  background: var(--accent) !important;
+  color: #fff !important;
+}
+.seg-btn:active { transform: scale(0.96); }
 
 /* Settings rows */
 .setting-row {
