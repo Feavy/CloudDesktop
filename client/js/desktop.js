@@ -1032,12 +1032,14 @@ function storedChoice(key, allowed, fallback) {
   return allowed.includes(v) ? v : fallback;
 }
 
-// Multiplier on the fitted size, guarded to something sane: autoFitResolution
-// multiplies with it, and a value of 0 or 500 from a hand-edited localStorage
-// would ask the server for a resolution it rejects.
+// Multipliers the Fit Factor buttons offer. Kept as one list so the guard below
+// and the markup cannot drift apart: a factor stored by hand that is not one of
+// these would otherwise ask the server for a resolution it rejects.
+const FIT_FACTORS = [1, 2, 3, 4];
+
 function storedFitFactor() {
   const n = parseFloat(localStorage.getItem('fit-factor'));
-  return n === 1 || n === 2 ? n : 1;
+  return FIT_FACTORS.includes(n) ? n : 1;
 }
 
 let fitFactor = storedFitFactor();
@@ -2202,10 +2204,14 @@ function autoFitResolution() {
   // nothing, and the HiDPI boost above is the one deliberate exception.
   //
   // The chosen factor then multiplies that fitted pair, and the bounds still
-  // cap it: x2 on a full-screen desktop is a denser desktop (noVNC scales it
-  // back down into the canvas) rather than one larger than the rail. It scales
-  // the resolution only -- font size and DPI are XFCE settings, applied
-  // separately -- so the two never both claim the same effect.
+  // cap it: a factor above 1 asks for a denser desktop (noVNC scales it back
+  // down into the canvas) rather than one larger than the rail. Because the cap
+  // applies to the scaled pair as a whole, the ratio survives and the top
+  // factors converge on the same maximum once the scaled size reaches the rail
+  // -- so x3 and x4 are the same request on a viewport that is already large
+  // enough, and only differ where the rail still has headroom. It scales the
+  // resolution only -- font size and DPI are XFCE settings, applied separately
+  // -- so the two never both claim the same effect.
   w *= fitFactor;
   h *= fitFactor;
 

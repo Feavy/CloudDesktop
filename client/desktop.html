@@ -305,11 +305,12 @@
       </div>
 
       <!-- Which shape "Fit Window" asks for. The factor multiplies the fitted
-           size before it is sent to xrandr, so x2 buys a desktop with twice
-           the pixels (crisper, and roomier for the window manager) which
-           noVNC then scales back down into the canvas. It multiplies the
-           resolution, not the app scaling, so it is independent of Font Size
-           and DPI below. -->
+           size before it is sent to xrandr, so x2 asks for twice the pixels
+           (crisper, and roomier for the window manager) which noVNC then
+           scales back down into the canvas. It multiplies the resolution, not
+           the app scaling, so it is independent of Font Size and DPI below.
+           The bounds in autoFitResolution still cap the result, so on a large
+           viewport the top factors converge on the same maximum. -->
       <div class="setting-row res-setting-row">
         <span class="setting-label">Fit Factor
           <span class="setting-hint">Fit Window size multiplier</span>
@@ -317,6 +318,8 @@
         <div class="seg-row" role="group" aria-label="Fit factor">
           <button class="seg-btn" data-factor="1">×1</button>
           <button class="seg-btn" data-factor="2">×2</button>
+          <button class="seg-btn" data-factor="3">×3</button>
+          <button class="seg-btn" data-factor="4">×4</button>
         </div>
       </div>
 
