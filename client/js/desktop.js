@@ -2160,7 +2160,15 @@ if (isStandalone) {
 // inside the canvas and leaves the remainder as empty margin, so on a 390x844
 // phone a 640x840 desktop (what independent clamping produced) was being
 // scaled down to 390x512 with a third of the page blank.
-const MAX_RES_W = 1920, MAX_RES_H = 1200;
+//
+// The rail is the largest size POST /api/desktop/resolution accepts
+// (320-3840 x 240-2160), not a second, smaller limit: anything below that
+// silently rewrites the request, which is what made x3 and x4 look broken.
+// With a 1920x1200 rail a 900x600 canvas turned x3 and x4 into the same
+// 1888x1200, and at 1200x800 x2, x3 and x4 all became 1864x1200 -- the
+// buttons worked, but the factor never reached the server. Keep these in step
+// with the range checked in routes/desktop.js.
+const MAX_RES_W = 3840, MAX_RES_H = 2160;
 const MIN_RES_H = 240;
 
 // Auto-fit VNC resolution to match the area the canvas actually occupies
