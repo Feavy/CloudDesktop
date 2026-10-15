@@ -298,11 +298,11 @@
       <!-- The old title ("Display Resolution") named only the preset grid,
            while the modal also holds text size and DPI, which change how big
            the text is drawn rather than how many pixels there are. The
-           subtitle says what the two sections below actually hold. -->
+           subtitle says what the controls below do, now that the section
+           headers that used to divide them are gone. -->
       <p class="res-subtitle">Choose how large the remote desktop is, and how large its text appears.</p>
 
-      <div class="res-section-header res-section-first">Resolution</div>
-      <!-- What the desktop is at right now. It leads the section because it
+      <!-- What the desktop is at right now. It leads the presets because it
            answers the question the modal exists for, instead of leaving the
            user to work it out from which button looks pressed. Filled by
            refreshResolutionReadout from noVNC's framebuffer size, which is the
@@ -313,35 +313,19 @@
         <span class="res-current-value" id="res-current-value" aria-live="polite">—</span>
       </div>
 
-      <!-- Presets carry their aspect ratio and the name the size is usually
-           known by, so the numbers can be matched to a screen at a glance. -->
+      <!-- One button per size, three to a row in the wider card: six presets
+           are two rows, and each button is a single line. The sizes are the
+           only labels -- the old notes under them (Full HD, 16:9, ...) were a
+           second line on every button and not what the choice is made on. -->
       <div class="res-grid" role="group" aria-label="Resolution presets">
-        <button class="res-btn" data-w="1920" data-h="1080">
-          <span class="res-btn-size">1920 × 1080</span>
-          <span class="res-btn-note">16:9 · Full HD</span>
-        </button>
-        <button class="res-btn" data-w="1600" data-h="900">
-          <span class="res-btn-size">1600 × 900</span>
-          <span class="res-btn-note">16:9 · HD+</span>
-        </button>
-        <button class="res-btn" data-w="1440" data-h="900">
-          <span class="res-btn-size">1440 × 900</span>
-          <span class="res-btn-note">16:10 · WXGA+</span>
-        </button>
-        <button class="res-btn" data-w="1366" data-h="768">
-          <span class="res-btn-size">1366 × 768</span>
-          <span class="res-btn-note">16:9 · WXGA</span>
-        </button>
-        <button class="res-btn" data-w="1280" data-h="720">
-          <span class="res-btn-size">1280 × 720</span>
-          <span class="res-btn-note">16:9 · HD</span>
-        </button>
+        <button class="res-btn" data-w="1920" data-h="1080">1920 × 1080</button>
+        <button class="res-btn" data-w="1600" data-h="900">1600 × 900</button>
+        <button class="res-btn" data-w="1440" data-h="900">1440 × 900</button>
+        <button class="res-btn" data-w="1366" data-h="768">1366 × 768</button>
+        <button class="res-btn" data-w="1280" data-h="720">1280 × 720</button>
         <!-- The one 4:3 size, for an old desktop or an app that insists on the
-             shape; it also fills the last cell of the 2-column grid. -->
-        <button class="res-btn" data-w="1024" data-h="768">
-          <span class="res-btn-size">1024 × 768</span>
-          <span class="res-btn-note">4:3 · XGA</span>
-        </button>
+             shape; it also makes the six presets exactly two rows of three. -->
+        <button class="res-btn" data-w="1024" data-h="768">1024 × 768</button>
         <!-- Spans the grid: it is a different kind of choice from the fixed
              sizes above it -- a request for whatever this window is -- and
              owning its own line says so. -->
@@ -350,10 +334,7 @@
                stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
             <path d="M7 3H3v4"/><path d="M13 3h4v4"/><path d="M7 17H3v-4"/><path d="M13 17h4v-4"/>
           </svg>
-          <span class="res-btn-text">
-            <span class="res-btn-size">Fit Window</span>
-            <span class="res-btn-note">Match this browser window</span>
-          </span>
+          Fit Window
         </button>
       </div>
 
@@ -380,8 +361,8 @@
       <!-- Font size and DPI are XFCE xsettings, not the resolution: the
            desktop stays the same size and its text and widgets get bigger.
            The choice is remembered per browser (localStorage) and re-applied
-           to the desktop on every connect. -->
-      <div class="res-section-header">Text Size</div>
+           to the desktop on every connect. Their own labels are what separate
+           them from the resolution controls now, not a section header. -->
       <div class="setting-row res-setting-row">
         <span class="setting-label">Font Size
           <span class="setting-hint">Desktop UI text</span>
@@ -408,10 +389,10 @@
       <!-- One control for the three remembered choices above -- Fit Factor,
            Font Size and DPI. The resolution presets are deliberately not part
            of it: those are a one-shot action, not a setting that stays where it
-           is put. The line above the buttons names what Reset restores, so the
-           button cannot be read as resetting the resolution above it. -->
+           is put. Its place in the footer, beside Done and away from the
+           presets, is what keeps it from reading as a reset of the resolution;
+           it carries no line of explanation of its own. -->
       <div class="res-footer">
-        <p class="res-footer-hint">Reset restores Fit Factor ×1, Font Medium and 96 DPI. It leaves the resolution alone.</p>
         <div class="res-footer-actions">
           <button id="resolution-reset" class="btn-ghost">Reset</button>
           <button id="resolution-close" class="btn-primary">Done</button>
