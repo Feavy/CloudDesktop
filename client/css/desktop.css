@@ -593,6 +593,20 @@ body.mobile-fullscreen #vnc-container { inset: 0 !important; }
 }
 .seg-btn:active { transform: scale(0.96); }
 
+/* The factor row carries five buttons (x1 to x2 in quarter steps), which no
+   longer leave room for the label beside them on a narrow bottom sheet. The
+   row wraps there and the group drops to its own line, kept right-aligned
+   under the label; the group itself may wrap as well if a viewport is
+   narrower still. Nothing moves on a desktop-width card, where both fit. */
+.fit-factor-row { flex-wrap: wrap; row-gap: 8px; }
+.fit-factor-row .seg-row { margin-left: auto; }
+.seg-row-fit { flex-wrap: wrap; }
+/* Five buttons where there used to be four: trimming the side padding keeps
+   them on one line beside the label in the 420px desktop card, where the
+   wrap rules above would otherwise push them onto a second line by a couple
+   of pixels. Their min-width still holds the touch target. */
+.seg-row-fit .seg-btn { padding-left: 5px; padding-right: 5px; }
+
 /* Settings rows */
 .setting-row {
   display: flex; align-items: center; justify-content: space-between;

@@ -1032,14 +1032,17 @@ function storedChoice(key, allowed, fallback) {
   return allowed.includes(v) ? v : fallback;
 }
 
-// Multipliers the Fit Factor buttons offer. Kept as one list so the guard below
-// and the markup cannot drift apart: a factor stored by hand that is not one of
-// these would otherwise ask the server for a resolution it rejects.
-const FIT_FACTORS = [1, 2, 3, 4];
+// Multipliers the Fit Factor buttons offer: x1 to x2 in quarter steps. Kept as
+// one list so the guard below and the markup cannot drift apart.
+const FIT_FACTORS = [1, 1.25, 1.5, 1.75, 2];
 
 function storedFitFactor() {
   const n = parseFloat(localStorage.getItem('fit-factor'));
-  return FIT_FACTORS.includes(n) ? n : 1;
+  if (!Number.isFinite(n)) return 1;
+  // Snap rather than reset, so a factor left behind by an older build that
+  // offered x3/x4 (see git history) lands on the nearest one the buttons still
+  // have -- x2 for those two -- instead of silently going back to x1.
+  return FIT_FACTORS.reduce((best, f) => (Math.abs(f - n) < Math.abs(best - n) ? f : best));
 }
 
 let fitFactor = storedFitFactor();
@@ -2163,11 +2166,11 @@ if (isStandalone) {
 //
 // The rail is the largest size POST /api/desktop/resolution accepts
 // (320-3840 x 240-2160), not a second, smaller limit: anything below that
-// silently rewrites the request, which is what made x3 and x4 look broken.
-// With a 1920x1200 rail a 900x600 canvas turned x3 and x4 into the same
-// 1888x1200, and at 1200x800 x2, x3 and x4 all became 1864x1200 -- the
-// buttons worked, but the factor never reached the server. Keep these in step
-// with the range checked in routes/desktop.js.
+// silently rewrites the request, which is what made the higher factors look
+// broken. With a 1920x1200 rail a 900x600 canvas turned the top factors into
+// the same 1888x1200, and at 1200x800 they all became 1864x1200 -- the buttons
+// worked, but the factor never reached the server. Keep these in step with the
+// range checked in routes/desktop.js.
 const MAX_RES_W = 3840, MAX_RES_H = 2160;
 const MIN_RES_H = 240;
 
@@ -2216,10 +2219,10 @@ function autoFitResolution() {
   // down into the canvas) rather than one larger than the rail. Because the cap
   // applies to the scaled pair as a whole, the ratio survives and the top
   // factors converge on the same maximum once the scaled size reaches the rail
-  // -- so x3 and x4 are the same request on a viewport that is already large
-  // enough, and only differ where the rail still has headroom. It scales the
-  // resolution only -- font size and DPI are XFCE settings, applied separately
-  // -- so the two never both claim the same effect.
+  // -- so x1.75 and x2 can be the same request on a viewport that is already
+  // large enough, and only differ where the rail still has headroom. It scales
+  // the resolution only -- font size and DPI are XFCE settings, applied
+  // separately -- so the two never both claim the same effect.
   w *= fitFactor;
   h *= fitFactor;
 
