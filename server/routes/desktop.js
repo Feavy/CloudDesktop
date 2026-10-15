@@ -20,6 +20,27 @@ const X_ENV = {
   HOME: config.HOME_DIR,
 };
 
+// The environment for the xfconf-query calls in the appearance routes below.
+//
+// They are the one thing here that does not talk to the X server but to the
+// desktop session's D-Bus, and X_ENV is not enough for that: this process is
+// launched beside Xtigervnc rather than inside the session (see the note at the
+// top of ../apps.js), so it never inherited DBUS_SESSION_BUS_ADDRESS. Asked
+// without one, libdbus starts a *second* session bus, and the xfconfd it
+// activates there is not the one the running xfsettingsd is watching: the
+// write lands in a channel nothing reads, so the desktop keeps its old text
+// size and DPI however the request is answered.
+//
+// apps.sessionEnv() recovers the session's own values from the processes that
+// do live in it, which is how a dock-launched application gets a settings
+// dialog that works. The keys it returns are fixed for the life of the session
+// and it answers {} when there is no session to read (the client-only image,
+// or a desktop still starting), so this degrades to plain X_ENV -- and to the
+// 503/502 the routes already report -- rather than guessing a bus.
+function xfconfEnv() {
+  return { ...X_ENV, ...apps.sessionEnv() };
+}
+
 // Run wmctrl against the desktop display. Resolves its stdout on success and
 // null on failure, so callers can tell "no windows" (an empty list) from
 // "could not ask" (an unusable display).
@@ -243,7 +264,7 @@ router.post('/resolution', (req, res) => {
 // than a resolution: /Gtk/FontName is the desktop's UI and monospace font, and
 // /Xft/DPI is the dots-per-inch Xft renders at. XFCE's xsettings daemon
 // watches this channel, so a change lands in the running applications without
-// a restart.
+// a restart -- on the session's own bus, which is what xfconfEnv() arranges.
 //
 // This is deliberately separate from POST /resolution. A resolution changes
 // how many pixels the desktop has; these change how big the text drawn into
@@ -279,7 +300,7 @@ function fontFamily() {
   if (!fontFamilyPromise) {
     fontFamilyPromise = new Promise((resolve) => {
       execFile('xfconf-query', ['-c', 'xsettings', '-p', '/Gtk/FontName'],
-        { env: X_ENV }, (err, stdout) => {
+        { env: xfconfEnv() }, (err, stdout) => {
           if (err) return resolve('Sans');
           const m = /^(.+?)\s+\d{1,3}$/.exec(String(stdout).trim());
           resolve(m ? m[1].trim() : 'Sans');
@@ -292,13 +313,39 @@ function fontFamily() {
 // xfconf-query needs the property's type to convert the value, and the wrong
 // one is not a silent no-op: "-s 'Sans 12' -t int" fails the write outright
 // ("cannot convert to gint"), which is how the font half of a request could
-// fail while the DPI half went through. Only the numeric value asks for a
-// type; a font name is written untyped, which is a string.
+// fail while the DPI half went through. So every write names its type, and a
+// font name names `string` even though that is what it would have been.
+//
+// Every write also creates the property when the channel does not have it yet.
+// The xsettings channel is not a fixed schema: this image's /etc/xdg carries
+// only the theme entries (install.sh writes that file and documents why), and
+// xfsettingsd keeps its remaining defaults in memory rather than storing them,
+// so /Gtk/FontName and /Xft/DPI exist only once something has set them. A
+// write to a property that is not there is refused -- "the property does not
+// exist in the channel, use --create" -- which is the other half of why this
+// route used to answer 502 on a fresh desktop. --create needs the type named
+// above: without one it refuses to create the property at all.
+//
+// The bus has to be the session's (see xfconfEnv) as well as the channel
+// carrying the properties, or none of the above reaches the desktop.
 function xfconfSet(property, value, type) {
-  const args = ['-c', 'xsettings', '-p', property, '-s', String(value)];
-  if (type) args.push('-t', type);
+  const args = [
+    '-c', 'xsettings',
+    '-p', property,
+    '-s', String(value),
+    '-t', type || 'string',
+    '--create',
+  ];
   return new Promise((resolve) => {
-    execFile('xfconf-query', args, { env: X_ENV }, (err) => resolve(!err));
+    execFile('xfconf-query', args, { env: xfconfEnv() }, (err, _stdout, stderr) => {
+      // The reason a write failed is the whole diagnosis for a 502 here, and
+      // nothing else surfaces it: xfconf-query reports it on stderr only.
+      if (err) {
+        console.error(`Appearance: xfconf-query failed for ${property}:`,
+          String(stderr || err.message).trim());
+      }
+      resolve(!err);
+    });
   });
 }
 
@@ -308,7 +355,7 @@ function xfconfSet(property, value, type) {
 function readXsettings() {
   return new Promise((resolve) => {
     execFile('xfconf-query', ['-c', 'xsettings', '-lv'],
-      { env: X_ENV, maxBuffer: 1024 * 1024 }, (err, stdout) => {
+      { env: xfconfEnv(), maxBuffer: 1024 * 1024 }, (err, stdout) => {
         if (err) return resolve(null);
         const out = {};
         for (const line of String(stdout).split('\n')) {
