@@ -348,6 +348,18 @@
         </div>
       </div>
 
+      <!-- One control for the three remembered choices above -- Fit Factor,
+           Font Size and DPI. The resolution presets are deliberately not part
+           of it: those are a one-shot action, not a setting that stays where it
+           is put. The hint names what "reset" restores, so the button cannot be
+           read as resetting the resolution above it. -->
+      <div class="setting-row res-setting-row">
+        <span class="setting-label">Fit &amp; Text
+          <span class="setting-hint">Back to ×1, Medium, 96 DPI</span>
+        </span>
+        <button id="resolution-reset" class="btn-ghost">Reset</button>
+      </div>
+
       <button id="resolution-close" class="btn-ghost" style="margin-top:14px">Close</button>
     </div>
   </div>

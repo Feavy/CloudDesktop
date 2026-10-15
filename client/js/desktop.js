@@ -1035,10 +1035,13 @@ function storedChoice(key, allowed, fallback) {
 // Multipliers the Fit Factor buttons offer: x1 to x2 in quarter steps. Kept as
 // one list so the guard below and the markup cannot drift apart.
 const FIT_FACTORS = [1, 1.25, 1.5, 1.75, 2];
+// What a browser that has never chosen a factor gets, and one of the three
+// values the Reset button restores.
+const DEFAULT_FIT_FACTOR = 1;
 
 function storedFitFactor() {
   const n = parseFloat(localStorage.getItem('fit-factor'));
-  if (!Number.isFinite(n)) return 1;
+  if (!Number.isFinite(n)) return DEFAULT_FIT_FACTOR;
   // Snap rather than reset, so a factor left behind by an older build that
   // offered x3/x4 (see git history) lands on the nearest one the buttons still
   // have -- x2 for those two -- instead of silently going back to x1.
@@ -1198,6 +1201,34 @@ dpiButtons.forEach((btn) => {
     updateAppearanceBtns(fontChoice, dpiChoice);
     applyTextSize();
   });
+});
+
+// One button for the three choices above, which are all the same shape: a
+// value remembered per browser in localStorage, re-applied to the desktop. The
+// resolution presets are not part of it, because they are a one-shot action
+// rather than a setting.
+//
+// The keys are removed rather than written back with the default values, so a
+// reset browser is the same as one that never chose: storedFitFactor() and
+// storedChoice() already fall back to exactly these, and the next load reads
+// them through that same path instead of through a stored copy of the default.
+document.getElementById('resolution-reset').addEventListener('click', () => {
+  fitFactor = DEFAULT_FIT_FACTOR;
+  fontChoice = DEFAULT_FONT_SIZE;
+  dpiChoice = DEFAULT_DPI;
+  for (const key of ['fit-factor', 'font-size', 'dpi']) {
+    localStorage.removeItem(key);
+  }
+
+  updateFitFactorBtns();
+  updateAppearanceBtns(fontChoice, dpiChoice);
+
+  // Both take effect now rather than at the next connect, as the individual
+  // controls do: the window re-fits into x1, and applyTextSize() puts the
+  // default size back on the desktop -- reporting what it settled on, or why
+  // it could not.
+  if (rfb) autoFitResolution();
+  applyTextSize();
 });
 
 selectResBtn(0, 0);
