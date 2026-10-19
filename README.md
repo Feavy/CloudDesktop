@@ -572,10 +572,17 @@ How it behaves:
   done. Delete that marker to seed again; a re-seed overwrites the image's files
   but does not delete files you added yourself.
 - On every start it remounts what the runtime provides inside the new root:
-  `/etc/hosts`, `/etc/resolv.conf`, `/etc/hostname`, the projected service
-  account token, plus `/proc`, `/sys`, `/dev` and fresh `tmpfs` mounts on `/tmp`
-  and `/run`. Any **other** volume mounted outside `ROOT_PERSIST_DIR` is not
-  visible after the pivot, so mount what you need inside it.
+  `/etc/hosts`, `/etc/resolv.conf`, `/etc/hostname`, plus `/proc`, `/sys`,
+  `/dev` and fresh `tmpfs` mounts on `/tmp` and `/run`. Any **other** volume
+  mounted outside `ROOT_PERSIST_DIR` is not visible after the pivot, so mount
+  what you need inside it.
+- kubelet serves the projected service account token as `0600 root:root`, which
+  an unprivileged desktop could not read, so the wrapper keeps that live mount
+  at `<ROOT_PERSIST_DIR>/run/.kube-serviceaccount` and publishes a copy at
+  `/var/run/secrets/kubernetes.io/serviceaccount`, owned by the desktop user
+  (`0600`) and refreshed as kubelet rotates it. Set
+  `automountServiceAccountToken: false` on the pod if the desktop should not
+  have the token at all.
 - The pivot needs root, so the wrapper calls `setpriv` to drop back to
   `DESKTOP_USER` (`ubuntu` by default) afterwards — the desktop itself still
   never runs as root. Override the target with `PERSISTENT_ROOT_USER`, or set it

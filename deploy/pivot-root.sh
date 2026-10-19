@@ -8,11 +8,13 @@
 #
 #  With ROOT_PERSIST_DIR=/some/volume it copies the image's root filesystem
 #  into that directory once, remounts the runtime filesystems kubelet hands the
-#  container (/etc/hosts, /etc/resolv.conf, /etc/hostname, the service account
-#  token, /proc, /sys, /dev and a tmpfs on /tmp and /run), calls pivot_root(2)
-#  into the copy and only then starts tini. Everything written afterwards --
-#  installed packages, $HOME, the XFCE session's state -- lands on the volume
-#  instead of the container's writable layer, so it survives pod restarts.
+#  container (/etc/hosts, /etc/resolv.conf, /etc/hostname, /proc, /sys, /dev and
+#  a tmpfs on /tmp and /run), publishes a readable copy of the service account
+#  token (kubelet serves it root-only away from the desktop user), calls
+#  pivot_root(2) into the copy and only then starts tini. Everything written
+#  afterwards -- installed packages, $HOME, the XFCE session's state -- lands on
+#  the volume instead of the container's writable layer, so it survives pod
+#  restarts.
 #
 #  pivot_root(2) needs a real uid of 0 and CAP_SYS_ADMIN, so the container has
 #  to override the image's unprivileged USER with runAsUser: 0 and add the
@@ -188,10 +190,6 @@ for f in /etc/hosts /etc/resolv.conf /etc/hostname; do
     fi
 done
 
-# The service account token is remounted below, once the persistent root's /run
-# is in place: it has to land on the tmpfs that will actually be /run after the
-# pivot, not on the container's own /run.
-
 mountpoint -q "$NEW/proc" || mount --rbind /proc "$NEW/proc"
 mountpoint -q "$NEW/sys"  || mount --rbind /sys  "$NEW/sys" \
     || echo "pivot-root: warning: could not mount /sys; some tools will not work" >&2
@@ -202,18 +200,61 @@ mountpoint -q "$NEW/dev"  || mount --rbind /dev  "$NEW/dev"
 mountpoint -q "$NEW/tmp" || mount -t tmpfs -o mode=1777,size=2g,nosuid,nodev tmpfs "$NEW/tmp"
 mountpoint -q "$NEW/run" || mount -t tmpfs -o mode=1777,size=256m,nosuid,nodev tmpfs "$NEW/run"
 
-# The service account token must stay a live mount: kubelet rotates it in place.
-# It has to live in the persistent root's /run -- the tmpfs mounted just above --
-# because that is what /var/run resolves to after the pivot. An Ubuntu image has
-# /var/run as an absolute symlink to /run, so "$NEW/var/run" resolves back to the
-# container's own /run; seeding or mounting through it would put the token
-# outside the persistent root (and, since the container's token is already a
-# mount point, silently skip the bind).
-SA=/var/run/secrets/kubernetes.io/serviceaccount
-HOST_SA="$NEW/run/secrets/kubernetes.io/serviceaccount"
-if mountpoint -q "$SA"; then
-    mkdir -p "$HOST_SA"
-    mountpoint -q "$HOST_SA" || mount --rbind "$SA" "$HOST_SA"
+# ── Service account token ───────────────────────────────────────────────────
+# kubelet serves the projected token on a read-only tmpfs with mode 0600 and
+# owner root:root, so the unprivileged desktop user cannot read it even when the
+# mount is in place -- this is true with or without a persistent root. Keep the
+# live mount at a private path inside the persistent root and publish a copy the
+# desktop user can read where workloads expect it. The token has to land in the
+# persistent root's /run -- the tmpfs mounted just above -- because that is what
+# /var/run resolves to after the pivot; an Ubuntu image has /var/run as an
+# absolute symlink to /run, so "$NEW/var/run" resolves back to the container's
+# own /run.
+#
+# The copy is refreshed after the pivot: kubelet rotates the token in place, and
+# a start-up snapshot would stop working once the token expires. Kubelet rotates
+# well before the current token expires, so refreshing behind it is safe.
+SA_SRC=/var/run/secrets/kubernetes.io/serviceaccount
+SA_KEEP="$NEW/run/.kube-serviceaccount"
+SA_LIVE="$NEW/run/secrets/kubernetes.io/serviceaccount"
+
+# The token copy is handed to the user we drop to, so the desktop can read it;
+# ca.crt and namespace are already world-readable in kubelet's mount.
+if [ -n "$DROP_UID" ]; then
+    SA_TOKEN_OWNER="$DROP_UID:$DROP_GID"
+else
+    SA_TOKEN_OWNER="0:0"
+fi
+
+publish_service_account() {
+    local src="$1" dst="$2" f tmp
+
+    mkdir -p "$dst" 2>/dev/null || return 0
+    for f in ca.crt namespace token; do
+        [ -e "$src/$f" ] || continue
+        if [ -f "$dst/$f" ] && [ "$(cat "$src/$f" 2>/dev/null)" = "$(cat "$dst/$f" 2>/dev/null)" ]; then
+            continue
+        fi
+        # Write to a temporary name and rename, so a reader never sees a
+        # half-written token.
+        tmp="$dst/.${f}.new"
+        if ( umask 077; cat "$src/$f" > "$tmp" ) 2>/dev/null; then
+            if [ "$f" = token ]; then
+                chown "$SA_TOKEN_OWNER" "$tmp" 2>/dev/null && chmod 0600 "$tmp" 2>/dev/null
+            else
+                chmod 0644 "$tmp" 2>/dev/null
+            fi && mv -f "$tmp" "$dst/$f" 2>/dev/null || rm -f "$tmp"
+        else
+            rm -f "$tmp"
+        fi
+    done
+    return 0
+}
+
+if mountpoint -q "$SA_SRC"; then
+    mkdir -p "$SA_KEEP"
+    mountpoint -q "$SA_KEEP" || mount --rbind "$SA_SRC" "$SA_KEEP"
+    publish_service_account "$SA_KEEP" "$SA_LIVE"
 fi
 
 # Webcams, when the pod was given one: a persistent root must not carry the
@@ -232,6 +273,19 @@ cd /
 umount -l /.oldroot
 rmdir /.oldroot
 echo "pivot-root: running on the persistent root at '${NEW}'"
+
+# kubelet rotates the service account token in place; follow it so the readable
+# copy published above does not expire mid-session. The source is the private
+# mount, which is still there at its post-pivot path.
+if mountpoint -q /run/.kube-serviceaccount; then
+    (
+        while :; do
+            sleep 60
+            publish_service_account /run/.kube-serviceaccount \
+                /run/secrets/kubernetes.io/serviceaccount
+        done
+    ) </dev/null >/dev/null 2>&1 &
+fi
 
 # Start in the user's home, not in /, which is where the cwd lands after the
 # pivot. The desktop session and the web client inherit it, and so does
