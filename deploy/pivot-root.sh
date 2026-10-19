@@ -145,7 +145,6 @@ if [ ! -f "$SEED_MARKER" ]; then
 
     mkdir -p "$NEW"/{proc,sys,dev,tmp,run,.oldroot}
     touch "$NEW/etc/hosts" "$NEW/etc/resolv.conf" "$NEW/etc/hostname"
-    mkdir -p "$NEW/var/run/secrets/kubernetes.io/serviceaccount"
     touch "$SEED_MARKER"
     echo "pivot-root: seeding done."
 fi
@@ -189,12 +188,9 @@ for f in /etc/hosts /etc/resolv.conf /etc/hostname; do
     fi
 done
 
-# The service account token must stay a live mount: it is rotated in place.
-SA=/var/run/secrets/kubernetes.io/serviceaccount
-if mountpoint -q "$SA"; then
-    mkdir -p "$NEW$SA"
-    mountpoint -q "$NEW$SA" || mount --rbind "$SA" "$NEW$SA"
-fi
+# The service account token is remounted below, once the persistent root's /run
+# is in place: it has to land on the tmpfs that will actually be /run after the
+# pivot, not on the container's own /run.
 
 mountpoint -q "$NEW/proc" || mount --rbind /proc "$NEW/proc"
 mountpoint -q "$NEW/sys"  || mount --rbind /sys  "$NEW/sys" \
@@ -205,6 +201,20 @@ mountpoint -q "$NEW/dev"  || mount --rbind /dev  "$NEW/dev"
 # into the persistent root and /tmp always arrives world-writable.
 mountpoint -q "$NEW/tmp" || mount -t tmpfs -o mode=1777,size=2g,nosuid,nodev tmpfs "$NEW/tmp"
 mountpoint -q "$NEW/run" || mount -t tmpfs -o mode=1777,size=256m,nosuid,nodev tmpfs "$NEW/run"
+
+# The service account token must stay a live mount: kubelet rotates it in place.
+# It has to live in the persistent root's /run -- the tmpfs mounted just above --
+# because that is what /var/run resolves to after the pivot. An Ubuntu image has
+# /var/run as an absolute symlink to /run, so "$NEW/var/run" resolves back to the
+# container's own /run; seeding or mounting through it would put the token
+# outside the persistent root (and, since the container's token is already a
+# mount point, silently skip the bind).
+SA=/var/run/secrets/kubernetes.io/serviceaccount
+HOST_SA="$NEW/run/secrets/kubernetes.io/serviceaccount"
+if mountpoint -q "$SA"; then
+    mkdir -p "$HOST_SA"
+    mountpoint -q "$HOST_SA" || mount --rbind "$SA" "$HOST_SA"
+fi
 
 # Webcams, when the pod was given one: a persistent root must not carry the
 # device nodes over from a previous run.
