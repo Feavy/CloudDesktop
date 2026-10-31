@@ -2,6 +2,8 @@
 # ============================================================================
 #  Persistent-root entrypoint for the desktop images.
 #
+#  deploy/persist-entry.sh runs this for PERSIST_MODE=full (or when
+#  ROOT_PERSIST_DIR is set in auto mode); it can also still be used directly.
 #  With ROOT_PERSIST_DIR unset (the default) this is a pure pass-through:
 #  the command it is given -- "/usr/bin/tini -- <the image's entrypoint>" --
 #  starts exactly as it did before this script existed.

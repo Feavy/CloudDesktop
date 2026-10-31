@@ -112,6 +112,13 @@ docker build -f Dockerfile.full \
   -t clouddesktop-full:latest .
 ```
 
+The delta persistence helper has a self-contained test suite (no root or Docker
+needed):
+
+```bash
+python3 -m unittest discover -s tests -v
+```
+
 `BASE_IMAGE` defaults to the published `clouddesktop-desktop:latest`, but a CI
 build passes an immutable per-commit tag instead so the base can never come from
 a different commit than the code on top of it.
@@ -137,9 +144,9 @@ CMD ["start-desktop"]
 It writes the desktop's scripts into the image: `/usr/local/bin/start-vnc`
 (Xtigervnc + XFCE + websockify) and `/usr/local/bin/xfce-vnc-session` (the session
 inside X, which also opens `~/.startup.sh` in a terminal — see
-[Startup script](#startup-script)). After installing, it asserts that all 17
-binaries the app invokes are actually present and fails the build naming the
-providing package if one is missing.
+[Startup script](#startup-script)). After installing, it asserts that every
+binary the app and session scripts invoke is actually present and fails the
+build naming the providing package if one is missing.
 
 `start-vnc` launches XFCE itself rather than delegating to the X server, because
 `Xtigervnc` has no `-xstartup` option — passing it fails with
@@ -155,7 +162,7 @@ Extras:
 | `UNMINIMIZE` | `1` | Run the base image's stock `unminimize` at build time, restoring the man pages, docs and translation catalogs the minimized `ubuntu:24.04` image dpkg-strips (without them the desktop stays in English regardless of `LANG`/`LC_ALL`) |
 | `INSTALL_TOOLS` | `1` | Common Linux command-line tools: git, vim, nano, htop, tmux, jq, zip/unzip, rsync, net-tools, dnsutils, bash-completion, man pages and friends |
 | `EXTRA_LOCALES` | *(empty)* | Extra locales baked in at build time, space-separated (`--build-arg EXTRA_LOCALES="fr_FR.UTF-8 de_DE.UTF-8"`). Only `en_US.UTF-8` is generated otherwise; `start-vnc` also generates a missing session locale on the fly at startup |
-| `DESKTOP_USER` | `ubuntu` | Unprivileged user `install.sh` creates or reuses (with `DESKTOP_UID`/`DESKTOP_GID`). Exported into the image so the persistent-root entrypoint knows which user to drop back to after its root-only pivot |
+| `DESKTOP_USER` | `ubuntu` | Unprivileged user `install.sh` creates or reuses (with `DESKTOP_UID`/`DESKTOP_GID`). Exported into the image so the persistence entrypoint knows which user to drop back to after setting up persistence |
 | `INSTALL_NODE` | `1` | Install Node.js from NodeSource (Ubuntu's own is 18, EOL). `Dockerfile.desktop` sets this to `0` |
 | `NODE_MAJOR` | `22` | NodeSource major version |
 | `INSTALL_THEME` | `1` | Theme the desktop with the [Orchis](https://github.com/vinceliuice/orchis-theme) GTK/xfwm4 theme in its **compact** flavour, matching Tela-circle icons, the Orchis wallpaper and a docked edge-to-edge panel. `0` keeps the stock XFCE look |
@@ -305,7 +312,7 @@ xfconf xsettings defaults, falling back to hicolor) and served by the API.
 
 Launched applications start in the desktop user's home — a `.desktop` file's own
 `Path=` still wins — so a terminal opens in `$HOME` rather than the server's
-`/app` or a persistent root's `/`. Terminals opened from the desktop itself use
+`/app` or a persisted root's `/`. Terminals opened from the desktop itself use
 the same directory: `install.sh` seeds it as xfce4-terminal's
 `default-working-directory` through `/etc/xdg`, and the session starts there.
 
@@ -335,7 +342,7 @@ unprivileged runtime user holds passwordless sudo — see
 neither, so `/api/desktop/config` reports `canInstallDeb: false` there and the
 button stays hidden. On a read-only root filesystem (the manifest's setting)
 apt has nowhere to write and the install fails: run the image from a persistent
-root (`ROOT_PERSIST_DIR`) or make the root filesystem writable. `DEB_MAX_MB`
+root (`PERSIST_MODE=delta` or `full`) or make the root filesystem writable. `DEB_MAX_MB`
 caps the download.
 
 This is the one route through which the web client runs something the user
@@ -522,27 +529,179 @@ directly. To narrow the blast radius, replace `NOPASSWD: ALL` in
 ubuntu ALL=(root) NOPASSWD: /usr/bin/pkill, /bin/rm -f /tmp/.X*-lock, /bin/mkdir -p /tmp/.X11-unix
 ```
 
-If you enable `readOnlyRootFilesystem` (the manifest does), you **must** mount a
-writable volume at `$HOME`: the file transfer API creates and writes
+If you enable `readOnlyRootFilesystem` (the client manifest does), you **must**
+mount a writable volume at `$HOME`: the file transfer API creates and writes
 `$HOME/Desktop` and `$HOME/Downloads`. The manifest does this with an `emptyDir`
 plus `fsGroup: 1000`; swap in a PersistentVolumeClaim if uploaded files should
 survive a restart.
 
-### Persistent root filesystem
+`PERSIST_MODE=delta` cannot work with `readOnlyRootFilesystem: true`: restoring
+the previous state writes into `/`. The `full` mode can, because it writes to
+the volume and pivots into it.
+
+### Persistent filesystem
 
 By default everything the desktop writes goes to the container's writable layer,
-so a restart — or an image upgrade — starts from the image again. Set
-`ROOT_PERSIST_DIR` to a mounted volume and the image copies its own root
-filesystem into that volume once, then `pivot_root(2)`s into the copy before
-starting `tini`. Packages, `$HOME`, the XFCE session and everything else then
-live on the volume instead of the container layer:
+so a restart — or an image upgrade — starts from the image again. `PERSIST_MODE`
+selects how state survives a restart:
+
+| `PERSIST_MODE` | What is stored | What it needs |
+|---|---|---|
+| `off` | Nothing; the container layer is discarded with the pod | Nothing |
+| `delta` | Only the paths that changed, as a shadow tree on a PVC | `runAsUser: 0` and a writable root filesystem. **No** added capabilities, no privileged mode, no unconfined profiles |
+| `full` | A complete copy of the root filesystem, pivot-rooted into | `runAsUser: 0` **plus** `SYS_ADMIN`, `SYS_CHROOT`, `SETUID`, `SETGID`, `CHOWN` and unconfined seccomp/AppArmor |
+
+`PERSIST_MODE=auto` (the default) keeps deployments written before this switch
+working: `ROOT_PERSIST_DIR` alone means `full`, `PERSIST_DIR` alone means
+`delta`, and neither means `off`. The volume path is `PERSIST_DIR`, falling back
+to `ROOT_PERSIST_DIR` and then `/persist`; `ROOT_PERSIST_DIR` remains accepted
+as the historic alias. Switching an existing `full` volume to `delta` does not
+import the seeded root; start delta with a fresh PVC (or copy the files you need
+out of it first).
+
+#### Delta mode
+
+Delta mode is the recommended choice when the pod should not be privileged. Set
+`PERSIST_MODE=delta` and mount a PVC at `PERSIST_DIR`. A standalone manifest is
+in [`deploy/kubernetes-desktop-delta.yaml`](deploy/kubernetes-desktop-delta.yaml):
 
 ```yaml
 containers:
   - name: desktop
     image: ghcr.io/feavy/clouddesktop-full:latest
     env:
-      - name: ROOT_PERSIST_DIR
+      - name: PERSIST_MODE
+        value: delta
+      - name: PERSIST_DIR
+        value: /persist
+      # Optional, seconds between syncs (default 300; 0 = shutdown only)
+      # - name: PERSIST_SYNC_INTERVAL
+      #   value: "300"
+    securityContext:
+      # Delta mode needs root to read and restore the whole filesystem, but
+      # NOTHING else: no capabilities.add, no privileged: true, and the normal
+      # seccomp/AppArmor profiles are fine.
+      runAsUser: 0
+      runAsGroup: 0
+      # The default capability set already contains SETUID/SETGID/CHOWN, which
+      # is what dropping back to DESKTOP_USER and restoring ownership need.
+      allowPrivilegeEscalation: false
+      # Delta restore writes into /, so this cannot be true.
+      readOnlyRootFilesystem: false
+    volumeMounts:
+      - { name: state, mountPath: /persist }
+      # Do not mount anything else: only paths on the container root are
+      # persisted, and other mounts are deliberately skipped.
+volumes:
+  - name: state
+    persistentVolumeClaim:
+      claimName: desktop-state
+```
+
+How it works:
+
+- Each image bakes an index of its own filesystem at build time
+  (`/usr/local/share/clouddesktop/delta-baseline.json.gz`). At runtime the
+  helper (`deploy/delta-persist.py`) walks the root and compares type, size,
+  mtime, mode and owner against that index. A path is part of the delta only
+  when it is new, differs from the baseline, or is already in the shadow — the
+  image's own files are never copied to the PVC.
+- Regular files, directories and symlinks are stored under
+  `<PERSIST_DIR>/.clouddesktop-delta/root/` with their ownership, mode, mtime
+  and (when the volume supports them) extended attributes; directory metadata
+  is kept separately and applied after the directory's contents. Sockets,
+  FIFOs and device nodes are runtime state and are not persisted.
+- At startup `restore` runs **before** the desktop (or the web client) starts.
+  It deletes the paths recorded as deleted, then copies the shadow back over
+  the fresh image, so a new pod sees the previous session's packages, `$HOME`,
+  XFCE configuration and files. A restore failure aborts startup with a
+  message instead of silently starting a non-persistent desktop.
+- A sync loop runs immediately and then every `PERSIST_SYNC_INTERVAL` seconds
+  (300 by default). The entrypoint also runs a final sync after the desktop
+  exits, so a normal pod shutdown captures the last changes. A `SIGKILL` (or
+  the kubelet not waiting for the process) can lose changes made since the
+  previous sync; give the pod a `terminationGracePeriodSeconds` long enough
+  for the desktop and the final scan.
+- Restoring a large delta also happens before the desktop starts, so the port
+  is not open yet. Use a `startupProbe` for `/health` rather than relying on
+  the liveness probe's initial delay; the example manifest allows five
+  minutes.
+- Deletions are remembered as tombstones in
+  `<PERSIST_DIR>/.clouddesktop-delta/tombstones.json`, including untouched
+  image files that were removed. Re-creating a path removes its tombstone.
+- On an image upgrade, the new image's baseline is used and the existing delta
+  is replayed on top of it. Files the user deleted stay deleted; files the
+  image now ships at the same path as a persisted file are overridden by the
+  persisted version. (The `full` mode instead runs the old copied root and does
+  not see the new image at all.)
+- These paths are **never** captured: `/proc`, `/sys`, `/dev`, `/run`, `/tmp`,
+  `/var/run`, `/var/tmp`, `/var/cache`, `/var/log`, `/mnt`, `/media`,
+  `/lost+found`, kubelet's `/etc/hosts`, `/etc/hostname` and
+  `/etc/resolv.conf`, and the package-manager lock files. Add your own with
+  `PERSIST_EXCLUDE`, as relative paths or globs:
+
+  ```yaml
+  - name: PERSIST_EXCLUDE
+    value: "home/ubuntu/.cache home/ubuntu/.local/share/Trash"
+  ```
+
+  `PERSIST_EXCLUDE="home/ubuntu/*.iso"` style globs also exclude everything
+  below a match. Anything mounted on a different filesystem from `/` is
+  skipped as well, so the PVC itself and kubelet's mounts are automatically
+  out of scope.
+- Restored files are written into the container's **writable layer**, not onto
+  the PVC: the volume stores the delta, and the root overlay gets a copy at
+  startup. The node therefore needs ephemeral storage for the delta as well as
+  the image, and a sync reads every changed file once more. This is the price
+  of not mounting an overlay, which is what would need `CAP_SYS_ADMIN`.
+- The store is not a backup or a snapshot history: a path has one current
+  version, and overwritten data is not retained. Size the PVC for the packages,
+  home directory and application data you expect the desktop to change, not for
+  a copy of the image. Hardlinks are restored as independent files, and sparse
+  files are copied densely.
+- A periodic sync copies files as it encounters them; a database or other file
+  being written during the scan can be captured mid-update. The final sync
+  after the desktop exits is the consistent point for a normal restart. If a
+  process must be snapshotted consistently, stop it before the pod shuts down
+  (or use `full` mode, which writes directly to the volume).
+- To inspect or reset it:
+
+  ```bash
+  kubectl exec deploy/desktop -- sudo python3 \
+    /usr/local/lib/clouddesktop/delta-persist.py status --store /persist
+  # Wipe persistence (stop the pod first, or start it with PERSIST_MODE=off)
+  kubectl exec deploy/desktop -- sudo rm -rf /persist/.clouddesktop-delta
+  ```
+
+  Deleting the store starts the next pod from a clean image with no deltas.
+  Individual files can be removed from
+  `/persist/.clouddesktop-delta/root/` while the pod is stopped, though the
+  matching tombstone may need removing too.
+- Delta mode runs the container as root, so a namespace with the `restricted`
+  Pod Security Standard will not admit it; `baseline` does. The desktop itself
+  is still started as `DESKTOP_USER` (`ubuntu` by default) via `setpriv`, so
+  XFCE and Xtigervnc keep their unprivileged behaviour. Delta mode relies on
+  the default container capability set (notably `SETUID`, `SETGID`, `CHOWN`,
+  `DAC_OVERRIDE` and `FOWNER`); if the pod drops `ALL` capabilities, those have
+  to be added back. That is a deliberate extra restriction of the deployment,
+  not something delta mode asks for.
+- `clouddesktop-client` has no desktop and does not implement any of this.
+
+#### Full mode
+
+Set `PERSIST_MODE=full` (or keep the legacy `ROOT_PERSIST_DIR` alone) and the
+image copies its own root filesystem into the volume once, then
+`pivot_root(2)`s into the copy before starting `tini`. This preserves
+everything, including deletions, and does not replay onto a newer image:
+
+```yaml
+containers:
+  - name: desktop
+    image: ghcr.io/feavy/clouddesktop-full:latest
+    env:
+      - name: PERSIST_MODE
+        value: full
+      - name: PERSIST_DIR
         value: /persist
     securityContext:
       # Required: the images run unprivileged on purpose, and these are what
@@ -568,17 +727,17 @@ How it behaves:
 
 - The first start **seeds** the volume with a copy of the image's root
   filesystem (`tar --one-file-system`, so the volume itself and kubelet's other
-  mounts are skipped) and creates `<ROOT_PERSIST_DIR>/.seeded` when it is
+  mounts are skipped) and creates `<PERSIST_DIR>/.seeded` when it is
   done. Delete that marker to seed again; a re-seed overwrites the image's files
   but does not delete files you added yourself.
 - On every start it remounts what the runtime provides inside the new root:
   `/etc/hosts`, `/etc/resolv.conf`, `/etc/hostname`, plus `/proc`, `/sys`,
   `/dev` and fresh `tmpfs` mounts on `/tmp` and `/run`. Any **other** volume
-  mounted outside `ROOT_PERSIST_DIR` is not visible after the pivot, so mount
+  mounted outside `PERSIST_DIR` is not visible after the pivot, so mount
   what you need inside it.
 - kubelet serves the projected service account token as `0600 root:root`, which
   an unprivileged desktop could not read, so the wrapper keeps that live mount
-  at `<ROOT_PERSIST_DIR>/run/.kube-serviceaccount` and publishes a copy at
+  at `<PERSIST_DIR>/run/.kube-serviceaccount` and publishes a copy at
   `/var/run/secrets/kubernetes.io/serviceaccount`, owned by the desktop user
   (`0600`) and refreshed as kubelet rotates it. Set
   `automountServiceAccountToken: false` on the pod if the desktop should not
@@ -591,10 +750,10 @@ How it behaves:
   volume — the entrypoint prints the `securityContext` and capability list above
   and exits, rather than starting a desktop that silently is not persistent.
 
-This is implemented by `deploy/pivot-root.sh`, which is the ENTRYPOINT of both
-desktop images. With `ROOT_PERSIST_DIR` unset it is a pass-through to `tini`,
-so nothing changes for the default deployment. `clouddesktop-client` has no
-desktop and is unaffected.
+`full` is implemented by `deploy/pivot-root.sh`; `delta` by
+`deploy/delta-persist.py`. `deploy/persist-entry.sh` is the ENTRYPOINT of both
+desktop images and dispatches on `PERSIST_MODE`. With persistence off it is a
+pass-through to `tini`, so nothing changes for the default deployment.
 
 ### Deployment shapes
 
@@ -688,8 +847,12 @@ All settings are environment variables.
 | `RESTART_CMD` | *(unset)* | Restart command used when there is no container to restart (a dev checkout) |
 | `RESTART_MODE` | `auto` | Force how the dock restarts: `auto`, `pod`, `session`, `command` or `off` |
 | `DEB_MAX_MB` | `512` | Largest `.deb` the app browser will download for installation, in MiB |
-| `ROOT_PERSIST_DIR` | *(unset)* | Mounted volume to `pivot_root` into at startup, so the whole root filesystem persists; see [Persistent root filesystem](#persistent-root-filesystem) |
-| `PERSISTENT_ROOT_USER` | `DESKTOP_USER` (`ubuntu`) | User the entrypoint drops back to after the pivot; `root` to stay root on purpose |
+| `PERSIST_MODE` | `auto` | Persistence mode: `off`, `delta` or `full`; `auto` keeps `ROOT_PERSIST_DIR` meaningful for older deployments. See [Persistent filesystem](#persistent-filesystem) |
+| `PERSIST_DIR` | `ROOT_PERSIST_DIR` or `/persist` | Volume the persistence mode stores state on |
+| `PERSIST_SYNC_INTERVAL` | `300` | Delta mode: seconds between syncs; `0` means only sync when the desktop exits |
+| `PERSIST_EXCLUDE` | *(unset)* | Delta mode: extra relative paths or globs not to persist, whitespace/comma separated |
+| `ROOT_PERSIST_DIR` | *(unset)* | Legacy alias for `PERSIST_DIR`; on its own it selects `full` in `auto` mode |
+| `PERSISTENT_ROOT_USER` | `DESKTOP_USER` (`ubuntu`) | User the entrypoint drops back to after persistence setup; `root` to stay root on purpose |
 | `DESKTOP_USER` | `ubuntu` | Unprivileged user the desktop runs as, also the default `PERSISTENT_ROOT_USER` |
 
 The dock's Restart button uses whichever mechanism actually reaches the

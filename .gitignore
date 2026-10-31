@@ -12,3 +12,7 @@ npm-debug.log*
 # Editors
 *.swp
 *.swo
+
+# Python bytecode
+__pycache__/
+*.py[cod]

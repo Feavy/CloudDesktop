@@ -252,6 +252,10 @@ apt-get install -y -qq --no-install-recommends \
 check_bin Xtigervnc   tigervnc-standalone-server
 check_bin vncconfig   tigervnc-common
 check_bin websockify  websockify
+# websockify is Python, and PERSIST_MODE=delta's helper (deploy/delta-persist.py)
+# uses the same interpreter. Assert it explicitly rather than relying on a
+# transitive dependency an apt change could drop.
+check_bin python3     websockify
 log "Xtigervnc: $(Xtigervnc -version 2>&1 | head -1)"
 
 # Desktop audio.

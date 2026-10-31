@@ -39,8 +39,11 @@ RUN cd server && npm ci --omit=dev && npm cache clean --force
 COPY server ./server
 COPY client ./client
 COPY deploy/entrypoint.sh /usr/local/bin/entrypoint
+COPY deploy/persist-entry.sh /usr/local/bin/persist-entry
 COPY deploy/pivot-root.sh /usr/local/bin/pivot-root
-RUN chmod +x /usr/local/bin/entrypoint /usr/local/bin/pivot-root
+COPY deploy/delta-persist.py /usr/local/lib/clouddesktop/delta-persist.py
+RUN chmod +x /usr/local/bin/entrypoint /usr/local/bin/persist-entry \
+       /usr/local/bin/pivot-root /usr/local/lib/clouddesktop/delta-persist.py
 
 # Bake the cache-busting version and the build timestamp into the client.
 # CI passes GITHUB_RUN_NUMBER and the commit time; local builds fall back to
@@ -51,6 +54,14 @@ ARG CACHE_VERSION=dev
 ARG BUILD_DATETIME
 RUN CACHE_VERSION=${CACHE_VERSION} BUILD_DATETIME=${BUILD_DATETIME} sh /tmp/stamp-cache-version.sh /app/client \
     && rm -f /tmp/stamp-cache-version.sh
+
+# Regenerate the delta baseline after /app and the stamped client are in place.
+# The base image already has one for the desktop layer, but this image adds
+# Node, the server and the client, so its index has to describe that final
+# filesystem. Delta mode stores only paths that differ from this index.
+RUN install -d /usr/local/share/clouddesktop \
+    && python3 /usr/local/lib/clouddesktop/delta-persist.py baseline \
+         --output /usr/local/share/clouddesktop/delta-baseline.json.gz
 
 ENV NODE_ENV=production \
     HOST=0.0.0.0 \
@@ -78,10 +89,11 @@ HEALTHCHECK --interval=30s --timeout=3s --start-period=120s --retries=3 \
 # .Xauthority that Xtigervnc wrote. Same uid, so that works.
 USER ubuntu
 
-# pivot-root is a pass-through unless ROOT_PERSIST_DIR is set, in which case
-# it pivot_roots into that directory before tini starts the desktop and the web
-# client; see deploy/pivot-root.sh. It exits with an explanation if the pod is
-# not privileged enough for that.
-# tini reaps the X, dbus and websockify children that the launcher forks
-ENTRYPOINT ["/usr/local/bin/pivot-root"]
+# persist-entry is a pass-through when no persistence variable is set. delta
+# keeps only changed files on a PVC (root user only, no extra capabilities);
+# full keeps the pivot_root(2) whole-root copy and needs the capabilities
+# deploy/pivot-root.sh documents. With PERSIST_MODE unset, ROOT_PERSIST_DIR
+# still selects full and PERSIST_DIR selects delta. tini reaps the X, dbus and
+# websockify children the launcher forks.
+ENTRYPOINT ["/usr/local/bin/persist-entry"]
 CMD ["/usr/bin/tini", "--", "/usr/local/bin/entrypoint"]

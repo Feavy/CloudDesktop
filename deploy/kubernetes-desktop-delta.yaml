@@ -1,0 +1,133 @@
+# Delta-persistent all-in-one desktop.
+#
+#   kubectl apply -f deploy/kubernetes-desktop-delta.yaml
+#
+# clouddesktop-full serves the web client on :3000 and websockify on :6900.
+# Put Traefik (TLS + forwardAuth) in front of the Service; see the IngressRoute
+# in deploy/kubernetes.yaml and the README's Persistent filesystem section.
+#
+# PERSIST_MODE=delta keeps only the files that changed on the PVC and restores
+# them at startup. It needs runAsUser: 0 so it can read and write the whole
+# filesystem, but no capabilities.add, no privileged: true and no unconfined
+# seccomp/AppArmor profile. This is the point of the mode.
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: desktop-state
+  labels:
+    app.kubernetes.io/name: desktop
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      # Size this for the packages, $HOME and application data the desktop
+      # changes -- not for a copy of the image, which delta mode never stores.
+      storage: 20Gi
+  # storageClassName: ""   # set the class your cluster uses
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: desktop
+  labels:
+    app.kubernetes.io/name: desktop
+spec:
+  replicas: 1
+  # ReadWriteOnce means the old pod must release the claim before the new one
+  # mounts it; Recreate avoids a rolling update racing itself on the volume.
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: desktop
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: desktop
+    spec:
+      # The final sync runs after the desktop exits; leave enough time for the
+      # desktop to shut down and for one filesystem scan.
+      terminationGracePeriodSeconds: 120
+      containers:
+        - name: desktop
+          image: ghcr.io/feavy/clouddesktop-full:latest
+          imagePullPolicy: Always
+          ports:
+            - name: http
+              containerPort: 3000
+            - name: websockify
+              containerPort: 6900
+          env:
+            - name: PERSIST_MODE
+              value: delta
+            - name: PERSIST_DIR
+              value: /persist
+            # Seconds between delta syncs. Deletions and changes made after the
+            # last sync are lost on SIGKILL, so this is the exposure window.
+            - name: PERSIST_SYNC_INTERVAL
+              value: "300"
+            # Extra paths/globs never to persist (relative to /):
+            # - name: PERSIST_EXCLUDE
+            #   value: "home/ubuntu/.cache home/ubuntu/.local/share/Trash"
+          securityContext:
+            # Required: root can read and restore every path. Nothing else is.
+            runAsUser: 0
+            runAsGroup: 0
+            allowPrivilegeEscalation: false
+            # Restoring the delta writes into /.
+            readOnlyRootFilesystem: false
+            # No capabilities.add. The default container set already includes
+            # the SETUID/SETGID/CHOWN the entrypoint uses to run the desktop as
+            # DESKTOP_USER and restore file ownership.
+          volumeMounts:
+            - name: state
+              mountPath: /persist
+          resources:
+            requests:
+              cpu: 500m
+              memory: 1Gi
+            limits:
+              memory: 4Gi
+          # Restoring a large delta happens before the server listens, so give
+          # it up to five minutes before liveness/readiness are allowed to fail.
+          startupProbe:
+            httpGet:
+              path: /health
+              port: http
+            periodSeconds: 5
+            failureThreshold: 60
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: http
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: http
+            initialDelaySeconds: 30
+            periodSeconds: 30
+      volumes:
+        - name: state
+          persistentVolumeClaim:
+            claimName: desktop-state
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: desktop
+  labels:
+    app.kubernetes.io/name: desktop
+spec:
+  selector:
+    app.kubernetes.io/name: desktop
+  ports:
+    - name: http
+      port: 3000
+      targetPort: http
+    - name: websockify
+      port: 6900
+      targetPort: websockify

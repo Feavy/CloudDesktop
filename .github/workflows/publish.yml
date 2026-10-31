@@ -127,6 +127,16 @@ jobs:
             echo "| build time | $build_time |"
           } >> "$GITHUB_STEP_SUMMARY"
 
+  test:
+    name: Test delta persistence
+    # Pure Python and filesystem work, no Docker: keeps a broken restore/sync
+    # path from reaching an image that would then be published.
+    runs-on: ${{ inputs.self-hosted && 'self-hosted' || 'ubuntu-latest' }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Run the delta persistence tests
+        run: python3 -m unittest discover -s tests -v
+
   build:
     name: Build ${{ matrix.image.name }}
     # Runs on pull requests too, to catch a broken build before merge. The
@@ -134,7 +144,7 @@ jobs:
     #
     # clouddesktop-full is NOT in this matrix: it is built FROM the desktop
     # image, so it needs this job to have finished and pushed. See build-full.
-    needs: prep
+    needs: [prep, test]
     runs-on: ${{ inputs.self-hosted && 'self-hosted' || 'ubuntu-latest' }}
     timeout-minutes: 90
     strategy:
