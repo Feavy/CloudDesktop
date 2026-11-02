@@ -51,13 +51,16 @@ EXPOSE 6900
 HEALTHCHECK --interval=30s --timeout=3s --start-period=120s --retries=3 \
   CMD bash -c 'exec 3<>/dev/tcp/127.0.0.1/${VNC_WS_PORT:-6900}' || exit 1
 
-# Persistence wrapper. PERSIST_MODE=delta keeps a shadow copy of changed files
-# on a PVC (root user only, no extra capabilities); PERSIST_MODE=full is the
+# Persistence wrapper. PERSIST_MODE=direct keeps the whole filesystem on a PVC
+# through kubelet subPath mounts (no added capabilities, plus a one-time seed
+# by deploy/seed-root.sh); PERSIST_MODE=delta keeps a shadow copy of changed
+# files (root user only, no extra capabilities); PERSIST_MODE=full is the
 # original pivot_root(2) whole-root copy (needs SYS_ADMIN and friends). With
 # PERSIST_MODE unset, the legacy variables still select a mode
 # (ROOT_PERSIST_DIR=full, PERSIST_DIR=delta, neither=off). See
-# deploy/persist-entry.sh and deploy/delta-persist.py.
+# deploy/persist-entry.sh, deploy/seed-root.sh and deploy/delta-persist.py.
 COPY deploy/persist-entry.sh /usr/local/bin/persist-entry
+COPY deploy/seed-root.sh /usr/local/bin/seed-root
 COPY deploy/pivot-root.sh /usr/local/bin/pivot-root
 COPY deploy/delta-persist.py /usr/local/lib/clouddesktop/delta-persist.py
 
@@ -66,8 +69,8 @@ COPY deploy/delta-persist.py /usr/local/lib/clouddesktop/delta-persist.py
 # paths the container actually changed are written to the PVC. This also
 # asserts that python3 is present (websockify pulls it in).
 RUN install -d /usr/local/share/clouddesktop \
-    && chmod +x /usr/local/bin/persist-entry /usr/local/bin/pivot-root \
-       /usr/local/lib/clouddesktop/delta-persist.py \
+    && chmod +x /usr/local/bin/persist-entry /usr/local/bin/seed-root \
+       /usr/local/bin/pivot-root /usr/local/lib/clouddesktop/delta-persist.py \
     && python3 /usr/local/lib/clouddesktop/delta-persist.py baseline \
          --output /usr/local/share/clouddesktop/delta-baseline.json.gz
 
@@ -79,6 +82,7 @@ USER ubuntu
 
 # tini reaps the X, dbus and websockify children that start-desktop forks.
 # persist-entry is a pass-through unless PERSIST_MODE (or the legacy
-# ROOT_PERSIST_DIR) asks for persistence.
+# ROOT_PERSIST_DIR) asks for persistence. direct only verifies the kubelet's
+# mounts and drops to DESKTOP_USER; the seed is the initContainer's job.
 ENTRYPOINT ["/usr/local/bin/persist-entry"]
 CMD ["/usr/bin/tini", "--", "/usr/local/bin/start-desktop"]

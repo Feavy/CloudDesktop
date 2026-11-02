@@ -1,0 +1,192 @@
+# Direct-persistent all-in-one desktop.
+#
+#   kubectl apply -f deploy/kubernetes-desktop-direct.yaml
+#
+# clouddesktop-full serves the web client on :3000 and websockify on :6900.
+# Put Traefik (TLS + forwardAuth) in front of the Service; see the IngressRoute
+# in deploy/kubernetes.yaml and the README's Persistent filesystem section.
+#
+# PERSIST_MODE=direct persists the whole filesystem by letting the KUBELET
+# mount the PVC at every writable top-level directory. The pod itself never
+# calls mount(2), pivot_root(2) or any other privileged operation, so it needs
+# no capabilities.add, no privileged: true and no unconfined seccomp/AppArmor
+# profile. The only thing it needs is runAsUser: 0 for the one-time seed and to
+# drop the desktop back to the unprivileged ubuntu user.
+#
+# Why this is fast: writes go straight to the volume (one copy, not two), there
+# is no periodic full-filesystem scan, and a restart only verifies the mounts.
+# The price is a one-time copy of the image into the PVC on the first start.
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: desktop-state
+  labels:
+    app.kubernetes.io/name: desktop
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      # The volume becomes the whole root filesystem: size it for the image
+      # (~2.5 GB) plus the packages, $HOME, caches and application data the
+      # desktop accumulates -- not for a delta.
+      storage: 20Gi
+  # storageClassName: ""   # set the class your cluster uses
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: desktop
+  labels:
+    app.kubernetes.io/name: desktop
+spec:
+  replicas: 1
+  # ReadWriteOnce means the old pod must release the claim before the new one
+  # mounts it; Recreate avoids a rolling update racing itself on the volume.
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: desktop
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: desktop
+    spec:
+      # The seed runs before the main container; first boot copies the image.
+      terminationGracePeriodSeconds: 60
+      # Do NOT set fsGroup here: fsGroup makes the kubelet chown the volume
+      # recursively, which would rewrite the ownership of /usr, /etc and $HOME.
+      initContainers:
+        - name: seed
+          image: ghcr.io/feavy/clouddesktop-full:latest
+          imagePullPolicy: Always
+          # Copies the image's persistent directories into the volume once and
+          # writes <volume>/.clouddesktop-seed/<dir>.done markers. It adopts a
+          # volume previously seeded by PERSIST_MODE=full instead of
+          # overwriting it. Set PERSIST_SEED_FORCE=1 to re-seed (destructive).
+          # Set command and args explicitly so no runtime can append the
+          # image's CMD ("tini -- entrypoint") to the seeder.
+          command:
+            - /usr/local/bin/seed-root
+          args:
+            - --persist
+            - /persist
+          env:
+            # Must match the main container's PERSIST_MOUNTS and volumeMounts.
+            - name: PERSIST_MOUNTS
+              value: "etc home opt root srv usr var app"
+            # - name: PERSIST_SEED_FORCE
+            #   value: "1"
+          securityContext:
+            # The one-time copy needs uid 0 to preserve ownership and modes.
+            # It needs NO capabilities.add: the default container capability
+            # set (CHOWN, DAC_OVERRIDE, FOWNER, SETFCAP, ...) is sufficient.
+            runAsUser: 0
+            runAsGroup: 0
+            readOnlyRootFilesystem: true
+            allowPrivilegeEscalation: false
+          volumeMounts:
+            - name: state
+              mountPath: /persist
+          resources:
+            requests:
+              cpu: 100m
+              memory: 256Mi
+      containers:
+        - name: desktop
+          image: ghcr.io/feavy/clouddesktop-full:latest
+          imagePullPolicy: Always
+          ports:
+            - name: http
+              containerPort: 3000
+            - name: websockify
+              containerPort: 6900
+          env:
+            - name: PERSIST_MODE
+              value: direct
+            # The directories the kubelet mounts below. persist-entry checks
+            # the seed marker of every one of them before starting the desktop.
+            - name: PERSIST_MOUNTS
+              value: "etc home opt root srv usr var app"
+            # Where the volume is also mounted read-only, for that check.
+            # Defaults to /persist.
+            # - name: PERSIST_DIR
+            #   value: /persist
+          securityContext:
+            # Root only as the supervisor: persist-entry verifies the mounts
+            # and then execs tini as DESKTOP_USER (ubuntu) through setpriv.
+            # No capabilities.add and no privileged mode. The default set
+            # includes the SETUID/SETGID/CHOWN that the drop needs.
+            #
+            # allowPrivilegeEscalation is left at its default on purpose: the
+            # desktop's passwordless sudo is a setuid binary, and apt/Synaptic
+            # would stop working if it were disabled.
+            #
+            # readOnlyRootFilesystem is deliberately off: /tmp and /run stay
+            # on the container's ephemeral writable layer, which is exactly
+            # where they belong.
+            runAsUser: 0
+            runAsGroup: 0
+          volumeMounts:
+            # The seed-marker mount must be read-only; it is not the store.
+            - { name: state, mountPath: /persist, readOnly: true }
+            # These are bind mounts performed by the kubelet -- not by this
+            # container -- so the container needs no added capability. Keep
+            # this list in the same order as PERSIST_MOUNTS, and mount extra
+            # configmaps/secrets AFTER these entries if they should be visible
+            # over a persisted directory.
+            - { name: state, mountPath: /etc, subPath: etc }
+            - { name: state, mountPath: /home, subPath: home }
+            - { name: state, mountPath: /opt, subPath: opt }
+            - { name: state, mountPath: /root, subPath: root }
+            - { name: state, mountPath: /srv, subPath: srv }
+            - { name: state, mountPath: /usr, subPath: usr }
+            - { name: state, mountPath: /var, subPath: var }
+            - { name: state, mountPath: /app, subPath: app }
+          resources:
+            requests:
+              cpu: 500m
+              memory: 1Gi
+            limits:
+              memory: 4Gi
+          startupProbe:
+            httpGet:
+              path: /health
+              port: http
+            periodSeconds: 5
+            failureThreshold: 60
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: http
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: http
+            initialDelaySeconds: 30
+            periodSeconds: 30
+      volumes:
+        - name: state
+          persistentVolumeClaim:
+            claimName: desktop-state
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: desktop
+  labels:
+    app.kubernetes.io/name: desktop
+spec:
+  selector:
+    app.kubernetes.io/name: desktop
+  ports:
+    - name: http
+      port: 3000
+      targetPort: http
+    - name: websockify
+      port: 6900
+      targetPort: websockify

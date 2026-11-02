@@ -112,8 +112,8 @@ docker build -f Dockerfile.full \
   -t clouddesktop-full:latest .
 ```
 
-The delta persistence helper has a self-contained test suite (no root or Docker
-needed):
+The persistence helpers (direct seeding, the delta store and the entrypoint)
+have a self-contained test suite (no root or Docker needed):
 
 ```bash
 python3 -m unittest discover -s tests -v
@@ -342,7 +342,8 @@ unprivileged runtime user holds passwordless sudo — see
 neither, so `/api/desktop/config` reports `canInstallDeb: false` there and the
 button stays hidden. On a read-only root filesystem (the manifest's setting)
 apt has nowhere to write and the install fails: run the image from a persistent
-root (`PERSIST_MODE=delta` or `full`) or make the root filesystem writable. `DEB_MAX_MB`
+root (`PERSIST_MODE=direct`, `delta` or `full`) or make the root filesystem
+writable. `DEB_MAX_MB`
 caps the download.
 
 This is the one route through which the web client runs something the user
@@ -536,8 +537,11 @@ plus `fsGroup: 1000`; swap in a PersistentVolumeClaim if uploaded files should
 survive a restart.
 
 `PERSIST_MODE=delta` cannot work with `readOnlyRootFilesystem: true`: restoring
-the previous state writes into `/`. The `full` mode can, because it writes to
-the volume and pivots into it.
+the previous state writes into `/`. Direct mode mounts everything persistent
+from the volume, but its manifest leaves `/` writable for the ephemeral `/tmp`
+and `/run`; add emptyDir mounts for those two if you want a read-only root. The
+`full` mode can keep a read-only root because it writes to the volume and pivots
+into it.
 
 ### Persistent filesystem
 
@@ -548,22 +552,137 @@ selects how state survives a restart:
 | `PERSIST_MODE` | What is stored | What it needs |
 |---|---|---|
 | `off` | Nothing; the container layer is discarded with the pod | Nothing |
+| `direct` | Every persistent top-level directory, written in place on the PVC through kubelet `subPath` mounts | `runAsUser: 0` for the seed initContainer and the supervisor, plus the manifest's mounts. **No** added capabilities, no privileged mode, no unconfined profiles |
 | `delta` | Only the paths that changed, as a shadow tree on a PVC | `runAsUser: 0` and a writable root filesystem. **No** added capabilities, no privileged mode, no unconfined profiles |
 | `full` | A complete copy of the root filesystem, pivot-rooted into | `runAsUser: 0` **plus** `SYS_ADMIN`, `SYS_CHROOT`, `SETUID`, `SETGID`, `CHOWN` and unconfined seccomp/AppArmor |
 
+`direct` is the recommended mode: it is the only mode that keeps the
+persistent filesystem on the volume without an added capability, and it does
+no periodic work. `delta` remains for
+deployments that cannot add the mounts to their pod spec; `full` remains for
+existing volumes that already rely on `pivot_root(2)`.
+
 `PERSIST_MODE=auto` (the default) keeps deployments written before this switch
 working: `ROOT_PERSIST_DIR` alone means `full`, `PERSIST_DIR` alone means
-`delta`, and neither means `off`. The volume path is `PERSIST_DIR`, falling back
-to `ROOT_PERSIST_DIR` and then `/persist`; `ROOT_PERSIST_DIR` remains accepted
-as the historic alias. Switching an existing `full` volume to `delta` does not
-import the seeded root; start delta with a fresh PVC (or copy the files you need
-out of it first).
+`delta`, and neither means `off`. `direct` is always selected explicitly,
+because it also requires the manifest's `subPath` mounts. The volume path is
+`PERSIST_DIR`, falling back to `ROOT_PERSIST_DIR` and then `/persist`;
+`ROOT_PERSIST_DIR` remains accepted as the historic alias. Switching an
+existing `full` volume to `delta` does not import the seeded root; switching it
+to `direct` adopts the volume in place (see below).
 
-#### Delta mode
+#### Direct mode
 
-Delta mode is the recommended choice when the pod should not be privileged. Set
-`PERSIST_MODE=delta` and mount a PVC at `PERSIST_DIR`. A standalone manifest is
-in [`deploy/kubernetes-desktop-delta.yaml`](deploy/kubernetes-desktop-delta.yaml):
+Direct mode puts the writable filesystem on the volume **in place**. The kubelet mounts
+the PVC at every persistent top-level directory with `subPath` volume mounts, so
+the container never calls `mount(2)` or `pivot_root(2)` itself. This is the
+whole trick: the mount is performed by the cluster, and the pod only needs
+`runAsUser: 0` (to seed once and to drop the desktop back to `ubuntu`), with no
+`capabilities.add`, no `privileged: true`, and no unconfined seccomp/AppArmor
+profile.
+
+The complete manifest is
+[`deploy/kubernetes-desktop-direct.yaml`](deploy/kubernetes-desktop-direct.yaml):
+
+```yaml
+initContainers:
+  - name: seed
+    image: ghcr.io/feavy/clouddesktop-full:latest
+    command: ["/usr/local/bin/seed-root"]
+    args: ["--persist", "/persist"]
+    env:
+      - { name: PERSIST_MOUNTS, value: "etc home opt root srv usr var app" }
+    securityContext:
+      runAsUser: 0
+      runAsGroup: 0
+      readOnlyRootFilesystem: true
+      allowPrivilegeEscalation: false
+      # no capabilities.add
+    volumeMounts:
+      - { name: state, mountPath: /persist }
+containers:
+  - name: desktop
+    env:
+      - { name: PERSIST_MODE, value: direct }
+      - { name: PERSIST_MOUNTS, value: "etc home opt root srv usr var app" }
+    securityContext:
+      runAsUser: 0          # supervisor only; the desktop runs as ubuntu
+      runAsGroup: 0
+    volumeMounts:
+      - { name: state, mountPath: /persist, readOnly: true }
+      - { name: state, mountPath: /etc, subPath: etc }
+      - { name: state, mountPath: /home, subPath: home }
+      # ... /opt, /root, /srv, /usr, /var, /app
+```
+
+How it works:
+
+- The **seed initContainer** (`deploy/seed-root.sh`) copies the image's listed
+  directories into the volume the first time. Each directory gets a
+  `<volume>/.clouddesktop-seed/<dir>.done` marker, so a killed seed resumes
+  where it stopped. A directory whose marker exists is never overwritten, and a
+  volume previously seeded by `full` is adopted in place (the layout is the
+  same), so switching `full` to `direct` keeps the user's files. During
+  adoption the persistence entrypoint is refreshed from the current image, so a
+  volume seeded before `direct` existed can switch without a re-seed.
+- The **main container's mounts are performed by the kubelet**, not by the
+  container. `persist-entry` checks that every directory in `PERSIST_MOUNTS` is
+  a mount, that all of them are on one filesystem, and that each has a seed
+  marker, then `exec`s tini through `setpriv` as `DESKTOP_USER`. The volume is
+  additionally mounted read-only at `/persist` just so those markers can be
+  read.
+- The initContainer's and the main container's `PERSIST_MOUNTS` must match, and
+  each must appear in `volumeMounts` as
+  `mountPath: /<dir>, subPath: <dir>`. Entries must be disjoint (list `/var`,
+  not both `/var` and `/var/lib`). A mismatch makes the pod fail with the exact
+  mounts to add rather than starting a desktop that is silently not persistent.
+
+Why it is faster than delta:
+
+- There is no periodic scan: sync is O(1), because there is nothing to sync.
+- A changed file is written once, straight to the PVC, instead of into the
+  shadow tree and again into the writable layer during restore.
+- A restart does not replay a delta; it stats a handful of mounts, so startup is
+  effectively instant after the first boot.
+- The volume holds the data itself, not a second copy plus a delta on the node.
+
+Trade-offs:
+
+- The first start copies the image (~2.5 GB) into the PVC. Size the claim for
+  the image plus the data the desktop accumulates; 20 GiB is a reasonable
+  start.
+- Everything inside a mounted directory persists, deletions included, because
+  it is a real filesystem. `/tmp` and `/run` are deliberately not mounted: they
+  stay ephemeral, so stale X locks and sockets cannot come back. `/proc`,
+  `/sys` and `/dev` are runtime filesystems and are never persisted. Files
+  created directly in `/` are not persisted either; put them in a mounted
+  directory. The default list covers the standard writable FHS directories;
+  add any other top-level directory your workload writes to (for example
+  `/boot`) to both `PERSIST_MOUNTS` and the `volumeMounts`.
+- The volume becomes the root, so an image upgrade does not change it (the same
+  behaviour as `full`). To start from a new image, delete the claim or set
+  `PERSIST_SEED_FORCE=1` on the init container: that re-seeds every listed
+  directory from the image and **discards** what was persisted there. There is
+  no merge.
+- Do **not** set `fsGroup` on the pod: the kubelet would recursively chown
+  `/usr`, `/etc` and `$HOME`. Mount extra ConfigMaps or Secrets *after* the
+  persisted entries if they should overmount a persisted directory.
+- The volume must be mounted with exec and suid: every binary and the setuid
+  `sudo` come from it, so a storage class that mounts `noexec` or `nosuid`
+  would break the desktop. The seed also copies ownership as root, so the
+  volume has to let root chown files (most block/file CSI drivers do; an NFS
+  export with root_squash does not).
+- Direct mode still runs the supervisor as uid 0, so the `restricted` Pod
+  Security Standard rejects it (as it does delta); `baseline` admits it. The
+  desktop itself is `ubuntu` (uid 1000), and unlike delta there is no
+  long-running root process walking or copying the filesystem.
+
+#### Delta mode (legacy)
+
+Delta mode is retained for deployments that cannot add the `subPath` mounts to
+their pod spec. Set `PERSIST_MODE=delta` and mount a PVC at `PERSIST_DIR`. A
+standalone manifest is in
+[`deploy/kubernetes-desktop-delta.yaml`](deploy/kubernetes-desktop-delta.yaml):
 
 ```yaml
 containers:
@@ -657,7 +776,9 @@ How it works:
   the PVC: the volume stores the delta, and the root overlay gets a copy at
   startup. The node therefore needs ephemeral storage for the delta as well as
   the image, and a sync reads every changed file once more. This is the price
-  of not mounting an overlay, which is what would need `CAP_SYS_ADMIN`.
+  of not mounting an overlay, which is what would need `CAP_SYS_ADMIN`. Direct
+  mode avoids that double copy by letting the kubelet do the mounts; use it
+  when the pod spec can carry them.
 - The store is not a backup or a snapshot history: a path has one current
   version, and overwritten data is not retained. Size the PVC for the packages,
   home directory and application data you expect the desktop to change, not for
@@ -667,7 +788,7 @@ How it works:
   being written during the scan can be captured mid-update. The final sync
   after the desktop exits is the consistent point for a normal restart. If a
   process must be snapshotted consistently, stop it before the pod shuts down
-  (or use `full` mode, which writes directly to the volume).
+  (or use `direct`/`full` mode, which write directly to the volume).
 - To inspect or reset it:
 
   ```bash
@@ -696,7 +817,9 @@ How it works:
 Set `PERSIST_MODE=full` (or keep the legacy `ROOT_PERSIST_DIR` alone) and the
 image copies its own root filesystem into the volume once, then
 `pivot_root(2)`s into the copy before starting `tini`. This preserves
-everything, including deletions, and does not replay onto a newer image:
+everything, including deletions, and does not replay onto a newer image. A
+volume seeded this way is adopted in place if you later switch it to `direct`
+mode, so the two can be exchanged without copying anything.
 
 ```yaml
 containers:
@@ -754,10 +877,12 @@ How it behaves:
   volume — the entrypoint prints the `securityContext` and capability list above
   and exits, rather than starting a desktop that silently is not persistent.
 
-`full` is implemented by `deploy/pivot-root.sh`; `delta` by
-`deploy/delta-persist.py`. `deploy/persist-entry.sh` is the ENTRYPOINT of both
-desktop images and dispatches on `PERSIST_MODE`. With persistence off it is a
-pass-through to `tini`, so nothing changes for the default deployment.
+`direct` is implemented by `deploy/seed-root.sh` (the initContainer) plus the
+mount and marker checks in `deploy/persist-entry.sh`; `delta` by
+`deploy/delta-persist.py`; `full` by `deploy/pivot-root.sh`.
+`deploy/persist-entry.sh` is the ENTRYPOINT of both desktop images and
+dispatches on `PERSIST_MODE`. With persistence off it is a pass-through to
+`tini`, so nothing changes for the default deployment.
 
 ### Deployment shapes
 
@@ -851,8 +976,10 @@ All settings are environment variables.
 | `RESTART_CMD` | *(unset)* | Restart command used when there is no container to restart (a dev checkout) |
 | `RESTART_MODE` | `auto` | Force how the dock restarts: `auto`, `pod`, `session`, `command` or `off` |
 | `DEB_MAX_MB` | `512` | Largest `.deb` the app browser will download for installation, in MiB |
-| `PERSIST_MODE` | `auto` | Persistence mode: `off`, `delta` or `full`; `auto` keeps `ROOT_PERSIST_DIR` meaningful for older deployments. See [Persistent filesystem](#persistent-filesystem) |
-| `PERSIST_DIR` | `ROOT_PERSIST_DIR` or `/persist` | Volume the persistence mode stores state on |
+| `PERSIST_MODE` | `auto` | Persistence mode: `off`, `direct`, `delta` or `full`; `auto` keeps `ROOT_PERSIST_DIR` meaningful for older deployments and never selects `direct` (the manifest must declare the mounts). See [Persistent filesystem](#persistent-filesystem) |
+| `PERSIST_DIR` | `ROOT_PERSIST_DIR` or `/persist` | Delta: where the store lives. Direct: where the volume is mounted read-only for the seed-marker check. Full: the persistent root |
+| `PERSIST_MOUNTS` | `etc home opt root srv usr var` | Direct mode: directories the kubelet mounts (the all-in-one manifest adds `app`). Must match the seed initContainer's value and the `subPath` volumeMounts |
+| `PERSIST_SEED_FORCE` | *(unset)* | Direct mode: `1` re-copies every listed directory from the image in the seed initContainer, discarding what was persisted. Destructive |
 | `PERSIST_SYNC_INTERVAL` | `300` | Delta mode: seconds between syncs; `0` means only sync when the desktop exits |
 | `PERSIST_EXCLUDE` | *(unset)* | Delta mode: extra relative paths or globs not to persist, whitespace/comma separated |
 | `ROOT_PERSIST_DIR` | *(unset)* | Legacy alias for `PERSIST_DIR`; on its own it selects `full` in `auto` mode |

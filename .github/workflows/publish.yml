@@ -128,13 +128,14 @@ jobs:
           } >> "$GITHUB_STEP_SUMMARY"
 
   test:
-    name: Test delta persistence
-    # Pure Python and filesystem work, no Docker: keeps a broken restore/sync
-    # path from reaching an image that would then be published.
+    name: Test persistence helpers
+    # Pure Python, shell and filesystem work, no Docker: keeps a broken seed,
+    # restore or mount check from reaching an image that would then be
+    # published.
     runs-on: ${{ inputs.self-hosted && 'self-hosted' || 'ubuntu-latest' }}
     steps:
       - uses: actions/checkout@v4
-      - name: Run the delta persistence tests
+      - name: Run the persistence tests
         run: python3 -m unittest discover -s tests -v
 
   build:

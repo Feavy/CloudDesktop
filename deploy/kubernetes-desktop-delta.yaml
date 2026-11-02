@@ -2,6 +2,10 @@
 #
 #   kubectl apply -f deploy/kubernetes-desktop-delta.yaml
 #
+# Delta mode is the legacy no-manifest-change option: it only needs env vars.
+# deploy/kubernetes-desktop-direct.yaml is faster (no scans, no copy-back) and
+# needs the same absence of capabilities; use it for new deployments.
+#
 # clouddesktop-full serves the web client on :3000 and websockify on :6900.
 # Put Traefik (TLS + forwardAuth) in front of the Service; see the IngressRoute
 # in deploy/kubernetes.yaml and the README's Persistent filesystem section.

@@ -40,10 +40,12 @@ COPY server ./server
 COPY client ./client
 COPY deploy/entrypoint.sh /usr/local/bin/entrypoint
 COPY deploy/persist-entry.sh /usr/local/bin/persist-entry
+COPY deploy/seed-root.sh /usr/local/bin/seed-root
 COPY deploy/pivot-root.sh /usr/local/bin/pivot-root
 COPY deploy/delta-persist.py /usr/local/lib/clouddesktop/delta-persist.py
 RUN chmod +x /usr/local/bin/entrypoint /usr/local/bin/persist-entry \
-       /usr/local/bin/pivot-root /usr/local/lib/clouddesktop/delta-persist.py
+       /usr/local/bin/seed-root /usr/local/bin/pivot-root \
+       /usr/local/lib/clouddesktop/delta-persist.py
 
 # Bake the cache-busting version and the build timestamp into the client.
 # CI passes GITHUB_RUN_NUMBER and the commit time; local builds fall back to
@@ -89,11 +91,13 @@ HEALTHCHECK --interval=30s --timeout=3s --start-period=120s --retries=3 \
 # .Xauthority that Xtigervnc wrote. Same uid, so that works.
 USER ubuntu
 
-# persist-entry is a pass-through when no persistence variable is set. delta
-# keeps only changed files on a PVC (root user only, no extra capabilities);
-# full keeps the pivot_root(2) whole-root copy and needs the capabilities
-# deploy/pivot-root.sh documents. With PERSIST_MODE unset, ROOT_PERSIST_DIR
-# still selects full and PERSIST_DIR selects delta. tini reaps the X, dbus and
-# websockify children the launcher forks.
+# persist-entry is a pass-through when no persistence variable is set. direct
+# verifies the kubelet's subPath mounts and drops to DESKTOP_USER, with the
+# volume seeded by deploy/seed-root.sh in an initContainer (root user only, no
+# extra capabilities); delta keeps only changed files on a PVC (root user
+# only); full keeps the pivot_root(2) whole-root copy and needs the
+# capabilities deploy/pivot-root.sh documents. With PERSIST_MODE unset,
+# ROOT_PERSIST_DIR still selects full and PERSIST_DIR selects delta. tini reaps
+# the X, dbus and websockify children the launcher forks.
 ENTRYPOINT ["/usr/local/bin/persist-entry"]
 CMD ["/usr/bin/tini", "--", "/usr/local/bin/entrypoint"]
