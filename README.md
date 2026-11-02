@@ -622,6 +622,10 @@ How it works:
   the kubelet not waiting for the process) can lose changes made since the
   previous sync; give the pod a `terminationGracePeriodSeconds` long enough
   for the desktop and the final scan.
+- Every sync logs that it is saving the filesystem state, one
+  `delta-persist: INFO: saved <path>` line for each path it writes, and a
+  `sync: ...` summary. Paths that did not change are not saved, so those lines
+  show exactly what the run captured.
 - Restoring a large delta also happens before the desktop starts, so the port
   is not open yet. Use a `startupProbe` for `/health` rather than relying on
   the liveness probe's initial delay; the example manifest allows five

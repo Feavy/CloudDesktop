@@ -146,6 +146,33 @@ class DeltaPersistTest(unittest.TestCase):
         tombstones = self._json("tombstones.json")
         self.assertIn("home/user/delete-me.txt", tombstones)
 
+    def test_sync_logs_each_saved_path(self):
+        self._write(self.root, "home/user/keep.txt", "changed\n", 0o640)
+        self._write(self.root, "home/user/new.txt", "new\n", 0o600)
+
+        result = self._sync()
+
+        self.assertIn("saving filesystem state to %s" % self.store,
+                      result.stderr)
+        self.assertIn("saved home/user/keep.txt", result.stderr)
+        self.assertIn("saved home/user/new.txt", result.stderr)
+        # Untouched image files are not saved, so they are not logged either.
+        self.assertNotIn("saved usr/bin/tool", result.stderr)
+
+    def test_sync_logs_a_save_each_time_only_when_state_changes(self):
+        self._write(self.root, "home/user/keep.txt", "changed\n", 0o640)
+        self._sync()
+
+        result = self._sync()
+
+        # A sync always announces that it is saving, even when there is
+        # nothing new to store...
+        self.assertIn("saving filesystem state to %s" % self.store,
+                      result.stderr)
+        # ...but it only logs a path when that path is actually written.
+        self.assertNotIn("INFO: saved ", result.stderr)
+        self.assertIn("0 saved", result.stderr)
+
     def test_restore_round_trip(self):
         self._write(self.root, "home/user/keep.txt", "changed\n", 0o640)
         self._write(self.root, "home/user/new.txt", "new\n", 0o600)

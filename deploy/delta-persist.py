@@ -696,6 +696,7 @@ def save_entry(store: Store, rel: str, abspath: str, st: os.stat_result,
     else:
         copy_regular(abspath, dest, st)
         dirs.pop(rel, None)
+    LOG.info("saved %s", rel)
 
 
 def record_ancestors(root: str, rel: str, dirs: dict[str, list]) -> None:
@@ -735,6 +736,7 @@ def run_sync(root: str, store: Store, baseline_path: str | None,
              excluder: Excluder) -> dict:
     started = time.monotonic()
     with store.lock():
+        LOG.info("saving filesystem state to %s", store.path)
         baseline = resolve_baseline(store, root, excluder, baseline_path,
                                     allow_create=False)
         dirs = store.load_dirs()
