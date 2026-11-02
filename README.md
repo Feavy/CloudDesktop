@@ -637,6 +637,25 @@ How it works:
   not both `/var` and `/var/lib`). A mismatch makes the pod fail with the exact
   mounts to add rather than starting a desktop that is silently not persistent.
 
+**Why not just `chroot` into the volume?** `chroot(2)` only changes path
+resolution. The runtime's `/proc`, `/sys` and `/dev` mounts (including
+`/dev/pts` and `/dev/shm`), plus any `/run` or `/tmp` mounts, stay attached to
+the old root and are unreachable after the chroot. Carrying them into
+`/persist` requires `mount(2)`. The `chroot(2)` call itself needs only
+`CAP_SYS_CHROOT`, which is in the default container capability set, but
+`mount(2)` -- and `pivot_root(2)`, which `full` uses -- needs `CAP_SYS_ADMIN`,
+an added capability. The default seccomp/AppArmor profiles may filter those
+calls too, which is why `full` also asks for unconfined profiles. Without the
+runtime mounts, process listing, XFCE session helpers, Node's resource APIs,
+terminals (`/dev/pts`) and Chrome (`/dev/shm`) are broken, so a chroot-only
+desktop is not viable. Mounting host `/proc`/`/dev` with `hostPath` would
+expose the host's namespaces and is worse. Direct mode leaves those runtime
+mounts where the runtime created them (on `/`) and moves only the writable
+directories to the volume, which is what makes it need no added capability. A
+user-namespace setup (`hostUsers: false`/`unshare`) can give a process
+`CAP_SYS_ADMIN` locally, but it depends on unprivileged user namespaces and on
+AppArmor/seccomp allowing the mounts, so it is not a portable replacement.
+
 Why it is faster than delta:
 
 - There is no periodic scan: sync is O(1), because there is nothing to sync.
@@ -655,10 +674,12 @@ Trade-offs:
   it is a real filesystem. `/tmp` and `/run` are deliberately not mounted: they
   stay ephemeral, so stale X locks and sockets cannot come back. `/proc`,
   `/sys` and `/dev` are runtime filesystems and are never persisted. Files
-  created directly in `/` are not persisted either; put them in a mounted
-  directory. The default list covers the standard writable FHS directories;
-  add any other top-level directory your workload writes to (for example
-  `/boot`) to both `PERSIST_MOUNTS` and the `volumeMounts`.
+  created directly in `/` are not persisted either; `delta` (which walks the
+  root) and `full` (which pivots into a copy) do capture them, `direct` does
+  not. Put new root-level files in a mounted directory. The default list covers
+  the standard writable FHS directories; add any other top-level directory your
+  workload writes to (for example `/boot`) to both `PERSIST_MOUNTS` and the
+  `volumeMounts`.
 - The volume becomes the root, so an image upgrade does not change it (the same
   behaviour as `full`). To start from a new image, delete the claim or set
   `PERSIST_SEED_FORCE=1` on the init container: that re-seeds every listed
